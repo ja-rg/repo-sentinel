@@ -12,7 +12,7 @@
             "program": "${file}",
             "cwd": "${workspaceFolder}",
             "stopOnEntry": false,
-            "watchMode": true
+            "watchMode": false
         },
         {
             "type": "bun",
