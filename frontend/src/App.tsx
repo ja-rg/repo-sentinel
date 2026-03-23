@@ -1,4 +1,4 @@
-import React, { useEffect, useMemo, useState } from "react";
+import React, { useEffect, useMemo, useRef, useState } from "react";
 
 type RunKind = "repo" | "archive" | "dockerfile" | "image" | "k8s_manifest";
 type RunStatus = "pending" | "running" | "done" | "failed" | "rejected";
@@ -81,18 +81,13 @@ function cn(...classes: Array<string | false | null | undefined>) {
   return classes.filter(Boolean).join(" ");
 }
 
-function prettyJson(value: unknown) {
-  if (value == null) return "No data";
-  if (typeof value === "string") {
-    try {
-      return JSON.stringify(JSON.parse(value), null, 2);
-    } catch {
-      return value;
-    }
+function prettyJson(value: unknown): string {
+  try {
+    return JSON.stringify(value, null, 2) ?? "";
+  } catch {
+    return String(value);
   }
-  return JSON.stringify(value, null, 2);
 }
-
 function parsePossiblyJson(value: unknown): unknown {
   if (typeof value !== "string") return value;
   try {
@@ -144,6 +139,7 @@ function App() {
 
   const [selectedRun, setSelectedRun] = useState<AnalysisRun | null>(null);
   const [selectedRunLoading, setSelectedRunLoading] = useState(false);
+  const selectedRunIdRef = useRef<number | null>(null);
 
   const [kind, setKind] = useState<RunKind>("repo");
   const [inputRef, setInputRef] = useState("");
@@ -154,6 +150,10 @@ function App() {
   const [submitError, setSubmitError] = useState<string | null>(null);
 
   const currentMeta = kindMeta[kind];
+
+  useEffect(() => {
+    selectedRunIdRef.current = selectedRun?.id ?? null;
+  }, [selectedRun]);
 
   async function loadHealth() {
     setHealthLoading(true);
@@ -174,7 +174,15 @@ function App() {
       const res = await fetch(`${API_BASE}/analysis-runs?limit=20`);
       const data = await res.json();
       setRuns(data);
-      if (!selectedRun && Array.isArray(data) && data.length > 0) {
+      const selectedRunId = selectedRunIdRef.current;
+      const hasSelectedRun =
+        Array.isArray(data) &&
+        selectedRunId !== null &&
+        data.some((run: AnalysisRun) => run.id === selectedRunId);
+
+      if (selectedRunId === null && Array.isArray(data) && data.length > 0) {
+        setSelectedRun(data[0]);
+      } else if (!hasSelectedRun && Array.isArray(data) && data.length > 0) {
         setSelectedRun(data[0]);
       }
     } catch {
@@ -263,8 +271,8 @@ function App() {
     const interval = window.setInterval(() => {
       loadHealth();
       loadRuns();
-      if (selectedRun?.id) {
-        loadRunById(selectedRun.id);
+      if (selectedRunIdRef.current) {
+        loadRunById(selectedRunIdRef.current);
       }
     }, 5000);
 
@@ -336,8 +344,8 @@ function App() {
                       {healthLoading
                         ? "Checking..."
                         : health?.ok
-                        ? "Operational"
-                        : "Unavailable"}
+                          ? "Operational"
+                          : "Unavailable"}
                     </span>
                   </div>
                 </div>
@@ -660,7 +668,7 @@ function App() {
               </div>
             </div>
 
-            <div className="grid gap-8 2xl:grid-cols-[0.9fr_1.1fr]">
+            <div className="grid gap-8">
               <div className="rounded-3xl border border-white/10 bg-white/5 p-6 backdrop-blur">
                 <div className="flex items-center justify-between">
                   <div>
@@ -788,9 +796,11 @@ function App() {
                           execution verdict
                         </span>
                       </div>
-                      <pre className="max-h-[260px] overflow-auto rounded-xl bg-[#02040b] p-4 text-xs leading-6 text-emerald-200">
-                        {prettyJson(selectedDecision)}
-                      </pre>
+                      <div className="max-h-[260px] overflow-auto rounded-xl bg-[#02040b] p-4 text-xs leading-6 text-emerald-200">
+                        <code className="block whitespace-pre-wrap break-words font-mono">
+                          {prettyJson(selectedDecision)}
+                        </code>
+                      </div>
                     </div>
                   )}
 
@@ -801,9 +811,33 @@ function App() {
                         scanner outputs
                       </span>
                     </div>
-                    <pre className="max-h-[420px] overflow-auto rounded-xl bg-[#02040b] p-4 text-xs leading-6 text-sky-200">
-                      {/* {prettyJson(selectedFindings)} */}
-                    </pre>
+                    <div className="space-y-4">
+                      {selectedFindings !== null &&
+                        selectedFindings !== undefined &&
+                        typeof selectedFindings === "object" &&
+                        !Array.isArray(selectedFindings) &&
+                        Object.entries(selectedFindings as Record<string, unknown>).map(
+                          ([key, value]) => (
+                            <div key={key}>
+                              <div className="mb-2 flex items-center justify-between">
+                                <h4 className="text-sm font-medium text-white">{key}</h4>
+                                <span className="text-xs text-zinc-500">
+                                  {Array.isArray(value)
+                                    ? `${value.length} items`
+                                    : value !== null && typeof value === "object"
+                                      ? "object"
+                                      : typeof value}
+                                </span>
+                              </div>
+                              <div className="max-h-[200px] overflow-auto rounded-xl bg-[#02040b] p-4 text-xs leading-6 text-emerald-200">
+                                <code className="block whitespace-pre-wrap break-words font-mono">
+                                  {prettyJson(value)}
+                                </code>
+                              </div>
+                            </div>
+                          )
+                        )}
+                    </div>
                   </div>
                 </div>
               </div>
