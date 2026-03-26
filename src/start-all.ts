@@ -1,6 +1,16 @@
 const children = [
-  Bun.spawn(["bun", "run", "api-server.ts"], { stdout: "inherit", stderr: "inherit" }),
-  Bun.spawn(["bun", "run", "runner.ts"], { stdout: "inherit", stderr: "inherit" }),
+  Bun.spawn(["bun", "run", "api-server.ts"], {
+    stdout: "inherit",
+    stderr: "inherit",
+  }),
+  Bun.spawn(["bun", "run", "runner.ts"], {
+    stdout: "inherit",
+    stderr: "inherit",
+  }),
+  Bun.spawn(["bun", "run", "workers.ts"], {
+    stdout: "inherit",
+    stderr: "inherit",
+  }),
 ];
 
 function shutdown() {

@@ -164,8 +164,6 @@ app.get("/analysis-runs/:id", (c) => {
   return c.json(rowToApi(row));
 });
 
-const distPath = join(process.cwd(), "dist");
-
 app.use("/assets/*", serveStatic({ root: "./dist" }));
 app.get("*", async (c) => {
   try {

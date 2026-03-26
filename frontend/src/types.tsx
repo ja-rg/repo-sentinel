@@ -1,3 +1,5 @@
+import type { WorkerStatus } from "./utilities/format";
+
 export type RunKind =
   | "repo"
   | "archive"
@@ -40,7 +42,7 @@ export type HealthReport = {
   service?: string;
   database?: unknown;
   worker?: {
-    status: CheckState;
+    status: WorkerStatus
     summary: string;
     active_workers?: number;
     stale_workers?: number;

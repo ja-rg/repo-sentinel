@@ -49,7 +49,7 @@ const REQUIRED_IMAGES = [
   "syft",
 ] as const;
 const WORKER_FRESHNESS_SECONDS = 15;
-const WORKER_STALE_SECONDS = 60;
+export const WORKER_STALE_SECONDS = 60;
 
 async function runCommand(
   cmd: string[],
@@ -311,10 +311,8 @@ function buildWorkerHealth() {
   );
   const stale_workers = Number(
     (db.query(
-      `SELECT COUNT(*) as count FROM worker_heartbeats WHERE ${freshnessExpr} > ?1 AND ${freshnessExpr} <= ?2`,
-    ).get(WORKER_FRESHNESS_SECONDS, WORKER_STALE_SECONDS) as
-      | { count: number }
-      | undefined)?.count ?? 0,
+      `SELECT COUNT(*) as count FROM worker_heartbeats WHERE status = 'stale'`,
+    ).get() as { count: number } | undefined)?.count ?? 0,
   );
 
   if (active_workers > 0) {

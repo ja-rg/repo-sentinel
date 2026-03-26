@@ -11,7 +11,8 @@ export function formatDateTime(value?: string | null) {
     hour: "2-digit",
     minute: "2-digit",
   }).format(date);
-}export function toneForRunStatus(status: RunStatus) {
+}
+export function toneForRunStatus(status: RunStatus) {
   switch (status) {
     case "done":
       return "text-emerald-300 border-emerald-500/40 bg-emerald-500/10";
@@ -37,4 +38,20 @@ export function toneForCheck(status?: CheckState) {
       return "text-zinc-300 border-zinc-700 bg-zinc-900";
   }
 }
+export const WORKER_STATUS = ["idle", "running", "stale", "error"] as const;
+export type WorkerStatus = (typeof WORKER_STATUS)[number];
 
+export function toneForWorkerStatus(status: WorkerStatus) {
+  switch (status) {
+    case "running":
+      return "text-sky-300 border-sky-500/40 bg-sky-500/10";
+    case "idle":
+      return "text-emerald-300 border-emerald-500/40 bg-emerald-500/10";
+    case "error":
+      return "text-rose-300 border-rose-500/40 bg-rose-500/10";
+    case "stale":
+      return "text-zinc-300 border-zinc-700 bg-zinc-900/50";
+    default:
+      return "text-zinc-300 border-zinc-700 bg-zinc-900";
+  }
+}

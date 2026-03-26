@@ -1,5 +1,5 @@
 import type { HealthReport } from "../types";
-import { toneForCheck } from "../utilities/format";
+import { toneForCheck, toneForWorkerStatus } from "../utilities/format";
 import { cn } from "../utilities/json";
 
 export function Stat({ label, value }: { label: string; value: string }) {
@@ -54,8 +54,6 @@ export function InlineNotice({
 export function HealthPanel({
   report,
   loading,
-  onKillWorker,
-  killingWorkerId,
 }: {
   report: HealthReport | null;
   loading: boolean;
@@ -98,7 +96,7 @@ export function HealthPanel({
             <span
               className={cn(
                 "inline-flex border px-2 py-1 text-xs uppercase tracking-wide",
-                toneForCheck(report.worker.status),
+                toneForWorkerStatus(report.worker.status),
               )}
             >
               {report.worker.status}
@@ -107,38 +105,26 @@ export function HealthPanel({
           {Array.isArray(report.worker.workers) &&
             report.worker.workers.length > 0 && (
               <div className="mt-3 space-y-2">
-                {report.worker.workers.map((worker) => {
-                  const isKilling = killingWorkerId === worker.worker_id;
-                  const canKill = worker.status !== "killed";
-
-                  return (
-                    <div
-                      key={worker.worker_id}
-                      className="flex flex-wrap items-center justify-between gap-2 border-t border-zinc-800 pt-2 text-xs text-zinc-500 first:border-t-0 first:pt-0"
-                    >
-                      <span>{worker.worker_id}</span>
-                      <span>pid {worker.pid ?? "?"}</span>
-                      <span>{worker.status ?? "unknown"}</span>
-                      <span>
-                        {worker.current_run_id
-                          ? `run #${worker.current_run_id}`
-                          : "idle"}
-                      </span>
-                      <span>{worker.last_seen_at ?? "no heartbeat"}</span>
-
-                      {onKillWorker && (
-                        <button
-                          type="button"
-                          disabled={!canKill || isKilling}
-                          onClick={() => onKillWorker(worker.worker_id)}
-                          className="border border-rose-500/30 bg-rose-500/10 px-2 py-1 text-xs text-rose-200 disabled:cursor-not-allowed disabled:opacity-50"
-                        >
-                          {isKilling ? "Killing..." : "Kill"}
-                        </button>
-                      )}
-                    </div>
-                  );
-                })}
+                {report.worker.workers
+                  .filter((worker) => worker.status !== "stale")
+                  .map((worker) => {
+                    return (
+                      <div
+                        key={worker.worker_id}
+                        className="flex flex-wrap items-center justify-between gap-2 border-t border-zinc-800 pt-2 text-xs text-zinc-500 first:border-t-0 first:pt-0"
+                      >
+                        <span>{worker.worker_id}</span>
+                        <span>pid {worker.pid ?? "?"}</span>
+                        <span>{worker.status ?? "unknown"}</span>
+                        <span>
+                          {worker.current_run_id
+                            ? `run #${worker.current_run_id}`
+                            : "idle"}
+                        </span>
+                        <span>{worker.last_seen_at ?? "no heartbeat"}</span>
+                      </div>
+                    );
+                  })}
               </div>
             )}
         </div>

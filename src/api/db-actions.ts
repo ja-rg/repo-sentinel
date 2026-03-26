@@ -21,6 +21,7 @@ export type RunStatus = typeof RUN_STATUS[number];
 export const WORKER_STATUS = [
   "idle",
   "running",
+  "stale",
   "error",
 ] as const;
 export type WorkerStatus = typeof WORKER_STATUS[number];
