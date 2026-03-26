@@ -3,7 +3,7 @@ import { cors } from "hono/cors";
 import { mkdirSync } from "node:fs";
 import { join } from "node:path";
 import { insertRun, listRuns, getRun } from "./src/api/db-actions";
-import { buildHealthReport } from "./src/api/health-helper.refactor";
+import { buildHealthReport } from "./src/api/health-helper";
 import { isValidKind, parseCreateRunRequest, rowToApi } from "./src/api/request-utilities";
 import { DATA_DIR, DB_PATH } from "./src/db";
 
