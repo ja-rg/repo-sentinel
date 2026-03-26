@@ -3,13 +3,21 @@ import { processDockerfile } from "./src/runner/process-dockerfile";
 import { processImage } from "./src/runner/process-image";
 import { processManifest } from "./src/runner/process-manifest";
 import { processRepoOrArchive } from "./src/runner/process-repo-or-archive";
-import { claimNextPendingRun, markRunDone, markRunFailed } from "./src/runner/update-runs";
+import {
+  claimNextPendingRun,
+  markRunDone,
+  markRunFailed,
+} from "./src/runner/update-runs";
 import { heartbeatWorker } from "./src/api/worker-manager";
 
 const workerId = `${hostname()}-${process.pid}`;
 const startedAt = new Date().toISOString();
 
-async function beat(status: "idle" | "running" | "error", currentRunId?: number | null, details?: unknown) {
+async function beat(
+  status: "idle" | "running" | "error",
+  currentRunId?: number | null,
+  details?: unknown,
+) {
   heartbeatWorker({
     workerId,
     pid: process.pid,
