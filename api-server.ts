@@ -1,11 +1,16 @@
 import { Hono } from "hono";
 import { cors } from "hono/cors";
-import { mkdirSync } from "node:fs";
+import { existsSync, mkdirSync } from "node:fs";
 import { join } from "node:path";
-import { insertRun, listRuns, getRun } from "./src/api/db-actions";
+import { getRun, insertRun, listRuns } from "./src/api/db-actions";
 import { buildHealthReport } from "./src/api/health-helper";
-import { isValidKind, parseCreateRunRequest, rowToApi } from "./src/api/request-utilities";
+import {
+  isValidKind,
+  parseCreateRunRequest,
+  rowToApi,
+} from "./src/api/request-utilities";
 import { DATA_DIR, DB_PATH } from "./src/db";
+import { serveStatic } from "hono/bun";
 
 const app = new Hono();
 let workerProcess: Bun.Subprocess | null = null;
@@ -59,7 +64,9 @@ app.post("/workers/ensure", async (c) => {
     ok: true,
     started: spawned.started,
     pid: spawned.pid,
-    message: spawned.started ? "Worker started." : "Worker already managed by API process.",
+    message: spawned.started
+      ? "Worker started."
+      : "Worker already managed by API process.",
   });
 });
 
@@ -71,11 +78,15 @@ app.post("/analysis-runs", async (c) => {
     const { kind, input_ref, file } = parsed;
 
     if (!isValidKind(kind)) {
-      return c.json({ error: "Invalid kind. Use one of: repo, archive, dockerfile, image, k8s_manifest" }, 400);
+      return c.json({
+        error:
+          "Invalid kind. Use one of: repo, archive, dockerfile, image, k8s_manifest",
+      }, 400);
     }
 
     const isJsonKind = kind === "repo" || kind === "image";
-    const isUploadKind = kind === "archive" || kind === "dockerfile" || kind === "k8s_manifest";
+    const isUploadKind = kind === "archive" || kind === "dockerfile" ||
+      kind === "k8s_manifest";
 
     if (isJsonKind) {
       if (typeof input_ref !== "string" || input_ref.trim() === "") {
@@ -94,7 +105,10 @@ app.post("/analysis-runs", async (c) => {
       return c.json({ error: "Unsupported kind" }, 400);
     }
 
-    const normalizedInputRef = typeof input_ref === "string" && input_ref.trim() !== "" ? input_ref.trim() : file.name || `${kind}-upload`;
+    const normalizedInputRef =
+      typeof input_ref === "string" && input_ref.trim() !== ""
+        ? input_ref.trim()
+        : file.name || `${kind}-upload`;
 
     const row = insertRun.get(kind, normalizedInputRef);
     const apiRow = rowToApi(row);
@@ -127,7 +141,9 @@ app.post("/analysis-runs", async (c) => {
 
 app.get("/analysis-runs", (c) => {
   const limitRaw = Number(c.req.query("limit") ?? 20);
-  const limit = Number.isFinite(limitRaw) ? Math.max(1, Math.min(100, Math.trunc(limitRaw))) : 20;
+  const limit = Number.isFinite(limitRaw)
+    ? Math.max(1, Math.min(100, Math.trunc(limitRaw)))
+    : 20;
   const rows = listRuns.all(limit).map(rowToApi);
   return c.json(rows);
 });
@@ -148,10 +164,24 @@ app.get("/analysis-runs/:id", (c) => {
   return c.json(rowToApi(row));
 });
 
+const distPath = join(process.cwd(), "dist");
+
+app.use("/assets/*", serveStatic({ root: "./dist" }));
+app.get("*", async (c) => {
+  try {
+    const html = await Bun.file("./dist/index.html").text();
+    return c.html(html);
+  } catch {
+    return c.json({ message: "API running" });
+  }
+});
+
 app.notFound((c) => c.json({ error: "Not found" }, 404));
 
 const port = Number(process.env.PORT ?? 3000);
 const server = Bun.serve({ port, fetch: app.fetch });
 
-console.log(`RepoSentinel API listening on http://${server.hostname}:${server.port}`);
+console.log(
+  `RepoSentinel API listening on http://${server.hostname}:${server.port}`,
+);
 console.log(`SQLite DB: ${DB_PATH}`);

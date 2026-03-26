@@ -1,6 +1,6 @@
 import React, { useEffect, useMemo, useRef, useState } from "react";
 import type { RunKind, AnalysisRun, HealthReport } from "./types";
-import { cn, JsonBlock, parseJson } from "./utilities/json";
+import { cn, parseJson } from "./utilities/json";
 import { formatDateTime, toneForRunStatus } from "./utilities/format";
 import { FindingsSectionView } from "./components/findings";
 import { normalizeHealth, normalizeFindings } from "./utilities/normalization";
@@ -12,6 +12,7 @@ import {
   Meta,
 } from "./components/meta";
 import { Subsection, SectionTitle, Field } from "./components/sections";
+import { JsonBlock } from "./utilities/json-block";
 
 const API_BASE = "http://localhost:3000";
 const POLL_MS = 5000;

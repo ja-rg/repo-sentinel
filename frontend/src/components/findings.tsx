@@ -1,6 +1,6 @@
 import { flattenTrivy } from "../tools/trivy";
 import type { FindingsSection } from "../types";
-import { JsonBlock } from "../utilities/json";
+import { JsonBlock } from "../utilities/json-block";
 
 function summarizeCodeText(value: unknown, maxLength = 20) {
   const text = String(value ?? "")
