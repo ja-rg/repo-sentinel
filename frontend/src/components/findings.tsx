@@ -258,13 +258,30 @@ function TrivyFindings({
 }) {
   const rows = flattenTrivy(items);
 
+  const counts = rows.reduce(
+    (acc, row) => {
+      const category = String(
+        (row as Record<string, unknown>).category ?? "other",
+      );
+      acc[category] = ((acc[category] as number) ?? 0) + 1;
+      return acc;
+    },
+    {} as Record<string, number>,
+  );
+
+  const summary = counts.secret
+    ? `${rows.length} findings · ${counts.secret} secrets`
+    : counts.vulnerability
+      ? `${rows.length} findings · ${counts.vulnerability} vulnerabilities`
+      : counts.misconfiguration
+        ? `${rows.length} findings · ${counts.misconfiguration} misconfigurations`
+        : `${rows.length} findings`;
+
   return (
     <div>
       <div className="mb-2 flex items-center justify-between gap-3">
         <h3 className="text-sm font-medium text-white">{title}</h3>
-        <span className="text-xs text-zinc-500">
-          {rows.length} vulnerabilities
-        </span>
+        <span className="text-xs text-zinc-500">{summary}</span>
       </div>
 
       {rows.length === 0 ? (
@@ -273,20 +290,95 @@ function TrivyFindings({
         <div className="space-y-2">
           {rows.map((entry, index) => {
             const item = entry as Record<string, unknown>;
-            const severity = String(
-              item.Severity ?? item.severity ?? "unknown",
-            );
-            const titleText =
-              item.Title ??
-              item.title ??
-              item.Description ??
-              item.description ??
-              item.Message ??
-              item.message ??
-              item.VulnerabilityID ??
-              item.ID ??
-              item.id ??
-              "Trivy vulnerability";
+            const category = item.category ?? "finding";
+            const severity = item.Severity ?? item.severity ?? "unknown";
+
+            if (category === "secret") {
+              const id = item.RuleID ?? item.ruleId ?? "secret-rule";
+              const titleText =
+                item.Title ??
+                item.title ??
+                item.Category ??
+                item.category ??
+                "Trivy secret";
+              const target = item.target ?? "unknown";
+              const startLine = item.StartLine ?? item.startLine;
+              const endLine = item.EndLine ?? item.endLine;
+              const match = item.Match ?? item.match;
+
+              return (
+                <div
+                  key={`${id}-${index}`}
+                  className="border border-zinc-800 p-3"
+                >
+                  <div className="flex flex-wrap items-center gap-2">
+                    <span className="border border-zinc-700 px-2 py-1 text-[11px] uppercase tracking-wide text-zinc-300">
+                      {String(severity)}
+                    </span>
+                    <span className="border border-zinc-700 px-2 py-1 text-[11px] uppercase tracking-wide text-zinc-300">
+                      secret
+                    </span>
+                    <span className="text-xs text-zinc-500">{String(id)}</span>
+                  </div>
+
+                  <p className="mt-2 text-sm text-white">{String(titleText)}</p>
+
+                  <div className="mt-2 flex flex-wrap gap-x-4 gap-y-1 text-xs text-zinc-500">
+                    <span>{String(target)}</span>
+                    {String(item.Category) && (
+                      <span>{String(item.Category)}</span>
+                    )}
+                    {String(startLine) && (
+                      <span>
+                        line {String(startLine)}
+                        {String(endLine) && endLine !== startLine
+                          ? `-${String(endLine)}`
+                          : ""}
+                      </span>
+                    )}
+                  </div>
+
+                  {String(match) && (
+                    <pre className="mt-3 overflow-auto border border-zinc-800 bg-black p-3 text-xs leading-6 text-emerald-200">
+                      <code>{String(match)}</code>
+                    </pre>
+                  )}
+                </div>
+              );
+            }
+
+            if (category === "misconfiguration") {
+              const id = item.ID ?? item.AVDID ?? item.id ?? "rule";
+              const titleText =
+                item.Title ?? item.title ?? item.Message ?? item.message ?? id;
+              const target = item.target ?? item.Target ?? "unknown";
+
+              return (
+                <div
+                  key={`${id}-${index}`}
+                  className="border border-zinc-800 p-3"
+                >
+                  <div className="flex flex-wrap items-center gap-2">
+                    <span className="border border-zinc-700 px-2 py-1 text-[11px] uppercase tracking-wide text-zinc-300">
+                      {String(severity)}
+                    </span>
+                    <span className="border border-zinc-700 px-2 py-1 text-[11px] uppercase tracking-wide text-zinc-300">
+                      misconfiguration
+                    </span>
+                    <span className="text-xs text-zinc-500">{String(id)}</span>
+                  </div>
+
+                  <p className="mt-2 text-sm text-white">{String(titleText)}</p>
+
+                  <div className="mt-2 flex flex-wrap gap-x-4 gap-y-1 text-xs text-zinc-500">
+                    <span>{String(target)}</span>
+                    {String(item.Resolution) && (
+                      <span>{String(item.Resolution)}</span>
+                    )}
+                  </div>
+                </div>
+              );
+            }
 
             const id =
               item.VulnerabilityID ??
@@ -294,6 +386,15 @@ function TrivyFindings({
               item.AVDID ??
               item.id ??
               "vuln";
+
+            const titleText =
+              item.Title ??
+              item.title ??
+              item.Description ??
+              item.description ??
+              item.Message ??
+              item.message ??
+              id;
 
             const target =
               item.PkgName ?? item.Target ?? item.target ?? "unknown";
@@ -310,7 +411,10 @@ function TrivyFindings({
               >
                 <div className="flex flex-wrap items-center gap-2">
                   <span className="border border-zinc-700 px-2 py-1 text-[11px] uppercase tracking-wide text-zinc-300">
-                    {severity}
+                    {String(severity)}
+                  </span>
+                  <span className="border border-zinc-700 px-2 py-1 text-[11px] uppercase tracking-wide text-zinc-300">
+                    vulnerability
                   </span>
                   <span className="text-xs text-zinc-500">{String(id)}</span>
                 </div>

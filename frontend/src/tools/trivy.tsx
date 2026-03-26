@@ -7,6 +7,7 @@ export function flattenTrivy(results: unknown[]) {
 
     const source = result as Record<string, unknown>;
     const target = source.Target ?? source.target;
+
     const base = {
       target,
       type: source.Type ?? source.type,
@@ -25,6 +26,12 @@ export function flattenTrivy(results: unknown[]) {
         ? source.misconfigurations
         : [];
 
+    const secrets = Array.isArray(source.Secrets)
+      ? source.Secrets
+      : Array.isArray(source.secrets)
+        ? source.secrets
+        : [];
+
     for (const vulnerability of vulnerabilities) {
       items.push({
         category: "vulnerability",
@@ -38,6 +45,14 @@ export function flattenTrivy(results: unknown[]) {
         category: "misconfiguration",
         ...base,
         ...misconfiguration,
+      });
+    }
+
+    for (const secret of secrets) {
+      items.push({
+        category: "secret",
+        ...base,
+        ...secret,
       });
     }
   }
