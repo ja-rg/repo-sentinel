@@ -1,27 +1,49 @@
 import { existsSync } from "node:fs";
 import { delimiter } from "node:path";
+import { db } from "../db";
 
-type CheckStatus = "ok" | "fail";
+type CheckState = "pass" | "warn" | "fail";
 
-type DependencyCheck = {
-  status: CheckStatus;
-  details?: unknown;
+type HealthCheck = {
+  key: string;
+  label: string;
+  status: CheckState;
+  summary: string;
   error?: string;
+  details?: unknown;
+  missing?: string[];
+};
+
+type WorkerSnapshot = {
+  worker_id: string;
+  pid: number | null;
+  status: string;
+  current_run_id: number | null;
+  last_seen_at: string;
+  started_at: string;
 };
 
 type HealthReport = {
   ok: boolean;
+  status: CheckState;
   service: string;
-  database: string;
-  checks: {
-    docker: DependencyCheck;
-    docker_images: DependencyCheck;
-    kubectl: DependencyCheck;
-    kubernetes: DependencyCheck;
+  database: {
+    path: string;
+    exists: boolean;
+  };
+  checks: HealthCheck[];
+  worker: {
+    status: CheckState;
+    summary: string;
+    active_workers: number;
+    stale_workers: number;
+    workers: WorkerSnapshot[];
   };
 };
 
 const REQUIRED_IMAGES = ["semgrep", "trivy", "grype", "nuclei", "syft"] as const;
+const WORKER_FRESHNESS_SECONDS = 15;
+const WORKER_STALE_SECONDS = 60;
 
 async function runCommand(
   cmd: string[],
@@ -62,24 +84,22 @@ function commandExists(command: string): boolean {
     if (!dir) continue;
 
     const candidate = `${dir}/${command}`;
-    if (existsSync(candidate)) {
-      return true;
-    }
+    if (existsSync(candidate)) return true;
 
-    // por compatibilidad si alguna vez corre en entorno con sufijos
     const exeCandidate = `${dir}/${command}.exe`;
-    if (existsSync(exeCandidate)) {
-      return true;
-    }
+    if (existsSync(exeCandidate)) return true;
   }
 
   return false;
 }
 
-async function checkDocker(): Promise<DependencyCheck> {
+async function checkDocker(): Promise<HealthCheck> {
   if (!commandExists("docker")) {
     return {
+      key: "docker",
+      label: "Docker",
       status: "fail",
+      summary: "docker binary not found",
       error: "docker binary not found in PATH",
     };
   }
@@ -87,35 +107,49 @@ async function checkDocker(): Promise<DependencyCheck> {
   const result = await runCommand(["docker", "info", "--format", "json"]);
   if (!result.ok) {
     return {
+      key: "docker",
+      label: "Docker",
       status: "fail",
+      summary: "docker daemon not reachable",
       error: result.stderr || "docker daemon not reachable",
     };
   }
 
+  let details: unknown = result.stdout;
+  try {
+    details = JSON.parse(result.stdout);
+  } catch {
+    // keep stdout when not json
+  }
+
   return {
-    status: "ok",
-    details: "docker daemon reachable",
+    key: "docker",
+    label: "Docker",
+    status: "pass",
+    summary: "docker daemon reachable",
+    details,
   };
 }
 
-async function checkDockerImages(): Promise<DependencyCheck> {
+async function checkDockerImages(): Promise<HealthCheck> {
   if (!commandExists("docker")) {
     return {
+      key: "docker_images",
+      label: "Docker images",
       status: "fail",
+      summary: "docker unavailable, cannot inspect images",
       error: "docker binary not found in PATH",
     };
   }
 
-  const result = await runCommand([
-    "docker",
-    "images",
-    "--format",
-    "{{.Repository}}:{{.Tag}}",
-  ]);
+  const result = await runCommand(["docker", "images", "--format", "{{.Repository}}:{{.Tag}}"]) ;
 
   if (!result.ok) {
     return {
+      key: "docker_images",
+      label: "Docker images",
       status: "fail",
+      summary: "unable to list docker images",
       error: result.stderr || "unable to list docker images",
     };
   }
@@ -128,8 +162,8 @@ async function checkDockerImages(): Promise<DependencyCheck> {
   );
 
   const imageMatches = REQUIRED_IMAGES.map((required) => {
-    const found = [...installed].some((img) => {
-      const repo = img.split(":")[0] ?? "";
+    const found = [...installed].some((image) => {
+      const repo = image.split(":")[0] ?? "";
       const shortRepo = repo.split("/").pop() ?? repo;
       return repo === required || shortRepo === required;
     });
@@ -137,26 +171,36 @@ async function checkDockerImages(): Promise<DependencyCheck> {
     return { image: required, found };
   });
 
-  const missing = imageMatches.filter((x) => !x.found).map((x) => x.image);
+  const missing = imageMatches.filter((item) => !item.found).map((item) => item.image);
 
   if (missing.length > 0) {
     return {
+      key: "docker_images",
+      label: "Docker images",
       status: "fail",
-      error: `missing images: ${missing.join(", ")}`,
+      summary: `missing required images: ${missing.join(", ")}`,
+      error: `missing required images: ${missing.join(", ")}`,
       details: imageMatches,
+      missing,
     };
   }
 
   return {
-    status: "ok",
+    key: "docker_images",
+    label: "Docker images",
+    status: "pass",
+    summary: "all required images are present",
     details: imageMatches,
   };
 }
 
-async function checkKubectl(): Promise<DependencyCheck> {
+async function checkKubectl(): Promise<HealthCheck> {
   if (!commandExists("kubectl")) {
     return {
-      status: "fail",
+      key: "kubectl",
+      label: "kubectl",
+      status: "warn",
+      summary: "kubectl binary not found",
       error: "kubectl binary not found in PATH",
     };
   }
@@ -164,28 +208,37 @@ async function checkKubectl(): Promise<DependencyCheck> {
   const result = await runCommand(["kubectl", "version", "--client", "--output=json"]);
   if (!result.ok) {
     return {
-      status: "fail",
+      key: "kubectl",
+      label: "kubectl",
+      status: "warn",
+      summary: "kubectl installed but not usable",
       error: result.stderr || "kubectl not usable",
     };
   }
 
-  let parsed: unknown = result.stdout;
+  let details: unknown = result.stdout;
   try {
-    parsed = JSON.parse(result.stdout);
+    details = JSON.parse(result.stdout);
   } catch {
-    // dejamos texto plano si no parsea
+    // keep stdout when not json
   }
 
   return {
-    status: "ok",
-    details: parsed,
+    key: "kubectl",
+    label: "kubectl",
+    status: "pass",
+    summary: "kubectl client usable",
+    details,
   };
 }
 
-async function checkKubernetes(): Promise<DependencyCheck> {
+async function checkKubernetes(): Promise<HealthCheck> {
   if (!commandExists("kubectl")) {
     return {
-      status: "fail",
+      key: "kubernetes",
+      label: "Kubernetes cluster",
+      status: "warn",
+      summary: "kubectl unavailable, cluster status unknown",
       error: "kubectl binary not found in PATH",
     };
   }
@@ -193,15 +246,84 @@ async function checkKubernetes(): Promise<DependencyCheck> {
   const result = await runCommand(["kubectl", "cluster-info"]);
   if (!result.ok) {
     return {
-      status: "fail",
+      key: "kubernetes",
+      label: "Kubernetes cluster",
+      status: "warn",
+      summary: "kubectl present but cluster not reachable",
       error: result.stderr || "kubernetes cluster not reachable",
     };
   }
 
   return {
-    status: "ok",
+    key: "kubernetes",
+    label: "Kubernetes cluster",
+    status: "pass",
+    summary: "cluster reachable",
     details: result.stdout,
   };
+}
+
+function buildWorkerHealth() {
+  db.run(`
+    CREATE TABLE IF NOT EXISTS worker_heartbeats (
+      worker_id TEXT PRIMARY KEY,
+      pid INTEGER,
+      status TEXT NOT NULL,
+      current_run_id INTEGER,
+      started_at TEXT NOT NULL DEFAULT (datetime('now')),
+      last_seen_at TEXT NOT NULL DEFAULT (datetime('now')),
+      details_json TEXT
+    )
+  `);
+
+  const workers = db.query(`
+    SELECT worker_id, pid, status, current_run_id, started_at, last_seen_at
+    FROM worker_heartbeats
+    ORDER BY last_seen_at DESC
+  `).all() as WorkerSnapshot[];
+
+  const freshnessExpr = `(strftime('%s','now') - strftime('%s', last_seen_at))`;
+  const active_workers = Number(
+    db.query(`SELECT COUNT(*) as count FROM worker_heartbeats WHERE ${freshnessExpr} <= ?1`).get(WORKER_FRESHNESS_SECONDS)?.count ?? 0,
+  );
+  const stale_workers = Number(
+    db.query(`SELECT COUNT(*) as count FROM worker_heartbeats WHERE ${freshnessExpr} > ?1 AND ${freshnessExpr} <= ?2`).get(WORKER_FRESHNESS_SECONDS, WORKER_STALE_SECONDS)?.count ?? 0,
+  );
+
+  if (active_workers > 0) {
+    return {
+      status: "pass" as const,
+      summary: `${active_workers} active worker${active_workers === 1 ? "" : "s"}`,
+      active_workers,
+      stale_workers,
+      workers,
+    };
+  }
+
+  if (stale_workers > 0) {
+    return {
+      status: "warn" as const,
+      summary: "no active worker heartbeat, but stale worker records exist",
+      active_workers,
+      stale_workers,
+      workers,
+    };
+  }
+
+  return {
+    status: "fail" as const,
+    summary: "no workers available",
+    active_workers,
+    stale_workers,
+    workers,
+  };
+}
+
+function overallStatus(checks: HealthCheck[], workerStatus: CheckState): CheckState {
+  const states = [...checks.map((check) => check.status), workerStatus];
+  if (states.includes("fail")) return "fail";
+  if (states.includes("warn")) return "warn";
+  return "pass";
 }
 
 export async function buildHealthReport(dbPath: string): Promise<HealthReport> {
@@ -212,21 +334,19 @@ export async function buildHealthReport(dbPath: string): Promise<HealthReport> {
     checkKubernetes(),
   ]);
 
-  const ok =
-    docker.status === "ok" &&
-    dockerImages.status === "ok" &&
-    kubectl.status === "ok" &&
-    kubernetes.status === "ok";
+  const checks = [docker, dockerImages, kubectl, kubernetes];
+  const worker = buildWorkerHealth();
+  const status = overallStatus(checks, worker.status);
 
   return {
-    ok,
+    ok: status !== "fail",
+    status,
     service: "reposentinel-api",
-    database: dbPath,
-    checks: {
-      docker,
-      docker_images: dockerImages,
-      kubectl,
-      kubernetes,
+    database: {
+      path: dbPath,
+      exists: existsSync(dbPath),
     },
+    checks,
+    worker,
   };
 }
