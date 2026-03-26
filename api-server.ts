@@ -1,6 +1,6 @@
 import { Hono } from "hono";
 import { cors } from "hono/cors";
-import { existsSync, mkdirSync } from "node:fs";
+import { mkdirSync } from "node:fs";
 import { join } from "node:path";
 import { getRun, insertRun, listRuns } from "./src/api/db-actions";
 import { buildHealthReport } from "./src/api/health-helper";

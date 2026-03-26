@@ -284,10 +284,10 @@ function buildWorkerHealth() {
 
   const freshnessExpr = `(strftime('%s','now') - strftime('%s', last_seen_at))`;
   const active_workers = Number(
-    db.query(`SELECT COUNT(*) as count FROM worker_heartbeats WHERE ${freshnessExpr} <= ?1`).get(WORKER_FRESHNESS_SECONDS)?.count ?? 0,
+    (db.query(`SELECT COUNT(*) as count FROM worker_heartbeats WHERE ${freshnessExpr} <= ?1`).get(WORKER_FRESHNESS_SECONDS) as { count: number } | undefined)?.count ?? 0,
   );
   const stale_workers = Number(
-    db.query(`SELECT COUNT(*) as count FROM worker_heartbeats WHERE ${freshnessExpr} > ?1 AND ${freshnessExpr} <= ?2`).get(WORKER_FRESHNESS_SECONDS, WORKER_STALE_SECONDS)?.count ?? 0,
+    (db.query(`SELECT COUNT(*) as count FROM worker_heartbeats WHERE ${freshnessExpr} > ?1 AND ${freshnessExpr} <= ?2`).get(WORKER_FRESHNESS_SECONDS, WORKER_STALE_SECONDS) as { count: number } | undefined)?.count ?? 0,
   );
 
   if (active_workers > 0) {
