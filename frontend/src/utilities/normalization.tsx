@@ -86,6 +86,18 @@ export function normalizeFindings(raw: unknown): FindingsSection[] {
     ];
   }
 
+  if (isSyftSbom(parsed)) {
+    return [
+      {
+        key: "syft",
+        title: "syft",
+        kind: "syft",
+        items: [],
+        raw: parsed,
+      },
+    ];
+  }
+
   if (Array.isArray(parsed)) {
     return [
       {

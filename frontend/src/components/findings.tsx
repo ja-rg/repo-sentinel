@@ -2,15 +2,65 @@ import { flattenTrivy } from "../tools/trivy";
 import type { FindingsSection } from "../types";
 import { JsonBlock } from "../utilities/json";
 
-function CodeTextBlock({ value }: { value: unknown }) {
+function summarizeCodeText(value: unknown, maxLength = 20) {
+  const text = String(value ?? "")
+    .replace(/\s+/g, " ")
+    .trim();
+
+  if (!text) return "Empty";
+  if (text.length <= maxLength) return text;
+
+  return `${text.slice(0, maxLength)}…`;
+}
+
+function CodeTextBlock({
+  value,
+  label = "Matched content",
+}: {
+  value: unknown;
+  label?: string;
+}) {
   if (value == null) return null;
 
+  const text = String(value);
+  const summary = summarizeCodeText(text);
+
   return (
-    <div className="mt-3 border border-zinc-800 bg-black p-3 text-xs leading-6 text-emerald-200">
-      <code className="block whitespace-pre-wrap break-all overflow-hidden">
-        {String(value)}
-      </code>
-    </div>
+    <details className="mt-3 border border-zinc-800 bg-black">
+      <summary className="cursor-pointer px-3 py-2 text-xs text-zinc-400">
+        <span className="font-medium text-zinc-300">{label}:</span>{" "}
+        <span className="break-all">{summary}</span>
+      </summary>
+
+      <div className="border-t border-zinc-800 p-3">
+        <code className="block whitespace-pre-wrap break-all overflow-hidden text-xs leading-6 text-emerald-200">
+          {text}
+        </code>
+      </div>
+    </details>
+  );
+}
+
+function ScannerSection({
+  title,
+  summary,
+  children,
+  defaultOpen = false,
+}: {
+  title: string;
+  summary: string;
+  children: React.ReactNode;
+  defaultOpen?: boolean;
+}) {
+  return (
+    <details open={defaultOpen} className="border border-zinc-800 bg-zinc-950">
+      <summary className="flex cursor-pointer flex-wrap items-center justify-between gap-3 px-3 py-2">
+        <span className="text-sm font-medium text-white">{title}</span>
+        <span className="text-xs text-zinc-500">{summary}</span>
+      </summary>
+
+      <div className="border-t border-zinc-800 p-3">{children}</div>
+    </details>
   );
 }
 
@@ -72,21 +122,30 @@ function SyftSbomFindings({ title, raw }: { title: string; raw: unknown }) {
     data.metadata && typeof data.metadata === "object"
       ? (data.metadata as Record<string, unknown>)
       : {};
-  const timestamp =
-    (metadata as Record<string, unknown>).timestamp ?? "unknown";
 
-  const components = (metadata as Record<string, unknown>).components;
-  const tools = Array.isArray(components) ? components : [];
+  const timestamp = metadata.timestamp ?? "unknown";
 
-  const subject = (metadata as Record<string, unknown>).component ?? null;
+  const toolsObject =
+    metadata.tools && typeof metadata.tools === "object"
+      ? (metadata.tools as Record<string, unknown>)
+      : {};
+
+  const toolComponents = toolsObject.components;
+  const tools = Array.isArray(toolComponents) ? toolComponents : [];
+
+  const subject =
+    metadata.component && typeof metadata.component === "object"
+      ? (metadata.component as Record<string, unknown>)
+      : null;
+
+  const components = Array.isArray(data.components) ? data.components : [];
 
   return (
-    <div>
-      <div className="mb-2 flex items-center justify-between gap-3">
-        <h3 className="text-sm font-medium text-white">{title}</h3>
-        <span className="text-xs text-zinc-500">Syft SBOM</span>
-      </div>
-
+    <ScannerSection
+      title={title}
+      summary={`SBOM · ${String(bomFormat)} ${String(specVersion)} · ${components.length} components`}
+      defaultOpen
+    >
       <div className="space-y-3">
         <div className="border border-zinc-800 p-3">
           <div className="grid gap-x-4 gap-y-2 sm:grid-cols-2">
@@ -135,15 +194,15 @@ function SyftSbomFindings({ title, raw }: { title: string; raw: unknown }) {
             </div>
             <div className="flex flex-wrap items-center gap-2">
               <span className="border border-zinc-700 px-2 py-1 text-[11px] uppercase tracking-wide text-zinc-300">
-                {String((subject as Record<string, unknown>).type ?? "unknown")}
+                {String(subject.type ?? "unknown")}
               </span>
               <span className="text-sm text-white">
-                {String((subject as Record<string, unknown>).name ?? "unknown")}
+                {String(subject.name ?? "unknown")}
               </span>
             </div>
-            {(subject as Record<string, unknown>)["bom-ref"] ? (
+            {subject["bom-ref"] ? (
               <div className="mt-2 break-all text-xs text-zinc-500">
-                {String((subject as Record<string, unknown>)["bom-ref"])}
+                {String(subject["bom-ref"])}
               </div>
             ) : null}
           </div>
@@ -165,24 +224,24 @@ function SyftSbomFindings({ title, raw }: { title: string; raw: unknown }) {
             <div className="space-y-2">
               {tools.map((tool: Record<string, unknown>, index: number) => (
                 <div
-                  key={`${tool?.name ?? "tool"}-${index}`}
+                  key={`${String(tool.name ?? "tool")}-${index}`}
                   className="border border-zinc-800 p-3"
                 >
                   <div className="flex flex-wrap items-center gap-2">
                     <span className="border border-zinc-700 px-2 py-1 text-[11px] uppercase tracking-wide text-zinc-300">
-                      {String(tool?.type ?? "tool")}
+                      {String(tool.type ?? "tool")}
                     </span>
                     <span className="text-sm text-white">
-                      {String(tool?.name ?? "unknown")}
+                      {String(tool.name ?? "unknown")}
                     </span>
-                    {String(tool?.version) && (
+                    {tool.version ? (
                       <span className="text-xs text-zinc-500">
                         {String(tool.version)}
                       </span>
-                    )}
+                    ) : null}
                   </div>
                   <div className="mt-2 text-xs text-zinc-500">
-                    {String(tool?.author ?? "unknown author")}
+                    {String(tool.author ?? "unknown author")}
                   </div>
                 </div>
               ))}
@@ -190,16 +249,70 @@ function SyftSbomFindings({ title, raw }: { title: string; raw: unknown }) {
           )}
         </div>
 
-        <details className="border border-zinc-800">
-          <summary className="cursor-pointer px-3 py-2 text-sm text-zinc-300">
-            Raw SBOM
-          </summary>
-          <div className="border-t border-zinc-800">
-            <JsonBlock value={raw} />
+        <div className="border border-zinc-800 p-3">
+          <div className="mb-2 flex items-center justify-between gap-3">
+            <div className="text-[11px] uppercase tracking-wide text-zinc-500">
+              components
+            </div>
+            <span className="text-xs text-zinc-500">
+              {components.length} entries
+            </span>
           </div>
-        </details>
+
+          {components.length === 0 ? (
+            <div className="text-sm text-zinc-500">No components.</div>
+          ) : (
+            <div className="space-y-2">
+              {components.slice(0, 25).map((component, index) => {
+                const item = component as Record<string, unknown>;
+                return (
+                  <div
+                    key={`${String(item["bom-ref"] ?? item.name ?? "component")}-${index}`}
+                    className="border border-zinc-800 p-3"
+                  >
+                    <div className="flex flex-wrap items-center gap-2">
+                      <span className="border border-zinc-700 px-2 py-1 text-[11px] uppercase tracking-wide text-zinc-300">
+                        {String(item.type ?? "component")}
+                      </span>
+                      <span className="text-sm text-white break-all">
+                        {String(item.name ?? "unknown")}
+                      </span>
+                      {item.version ? (
+                        <span className="text-xs text-zinc-500">
+                          {String(item.version)}
+                        </span>
+                      ) : null}
+                    </div>
+
+                    <div className="mt-2 flex flex-wrap gap-x-4 gap-y-1 text-xs text-zinc-500">
+                      {item.purl ? (
+                        <span className="break-all">{String(item.purl)}</span>
+                      ) : null}
+                      {item["bom-ref"] ? (
+                        <span className="break-all">
+                          {String(item["bom-ref"])}
+                        </span>
+                      ) : null}
+                    </div>
+                  </div>
+                );
+              })}
+
+              {components.length > 25 ? (
+                <div className="text-xs text-zinc-500">
+                  Showing first 25 of {components.length} components
+                </div>
+              ) : null}
+            </div>
+          )}
+        </div>
+
+        <CodeTextBlock
+          value={JSON.stringify(data, null, 2)}
+          label="Raw SBOM JSON"
+        />
       </div>
-    </div>
+    </ScannerSection>
   );
 }
 function SemgrepFindings({
@@ -212,14 +325,10 @@ function SemgrepFindings({
   raw: unknown;
 }) {
   const rows = Array.isArray(items) ? items : [];
+  const summary = `${rows.length} results`;
 
   return (
-    <div>
-      <div className="mb-2 flex items-center justify-between gap-3">
-        <h3 className="text-sm font-medium text-white">{title}</h3>
-        <span className="text-xs text-zinc-500">{rows.length} results</span>
-      </div>
-
+    <ScannerSection title={title} summary={summary}>
       {rows.length === 0 ? (
         <JsonBlock value={raw} />
       ) : (
@@ -252,13 +361,13 @@ function SemgrepFindings({
                   <span className="border border-zinc-700 px-2 py-1 text-[11px] uppercase tracking-wide text-zinc-300">
                     {severity}
                   </span>
-                  <span className="text-xs text-zinc-500">
+                  <span className="text-xs text-zinc-500 break-all">
                     {String(item.check_id || "rule")}
                   </span>
                 </div>
                 <p className="mt-2 text-sm text-white">{String(message)}</p>
                 <div className="mt-2 flex flex-wrap gap-x-4 gap-y-1 text-xs text-zinc-500">
-                  <span>{String(path)}</span>
+                  <span className="break-all">{String(path)}</span>
                   <span>line {String(line)}</span>
                 </div>
               </div>
@@ -266,7 +375,7 @@ function SemgrepFindings({
           })}
         </div>
       )}
-    </div>
+    </ScannerSection>
   );
 }
 function TrivyFindings({
@@ -291,21 +400,19 @@ function TrivyFindings({
     {} as Record<string, number>,
   );
 
-  const summary = counts.secret
-    ? `${rows.length} findings · ${counts.secret} secrets`
-    : counts.vulnerability
-      ? `${rows.length} findings · ${counts.vulnerability} vulnerabilities`
-      : counts.misconfiguration
-        ? `${rows.length} findings · ${counts.misconfiguration} misconfigurations`
-        : `${rows.length} findings`;
+  const summary = [
+    `${rows.length} findings`,
+    counts.secret ? `${counts.secret} secrets` : null,
+    counts.vulnerability ? `${counts.vulnerability} vulnerabilities` : null,
+    counts.misconfiguration
+      ? `${counts.misconfiguration} misconfigurations`
+      : null,
+  ]
+    .filter(Boolean)
+    .join(" · ");
 
   return (
-    <div>
-      <div className="mb-2 flex items-center justify-between gap-3">
-        <h3 className="text-sm font-medium text-white">{title}</h3>
-        <span className="text-xs text-zinc-500">{summary}</span>
-      </div>
-
+    <ScannerSection title={title} summary={summary}>
       {rows.length === 0 ? (
         <JsonBlock value={raw} />
       ) : (
@@ -459,7 +566,7 @@ function TrivyFindings({
           })}
         </div>
       )}
-    </div>
+    </ScannerSection>
   );
 }
 function GenericFindings({
@@ -481,7 +588,6 @@ function GenericFindings({
     </div>
   );
 }
-
 function GitleaksFindings({
   title,
   items,
@@ -492,14 +598,10 @@ function GitleaksFindings({
   raw: unknown;
 }) {
   const rows = Array.isArray(items) ? items : [];
+  const summary = `${rows.length} leaks`;
 
   return (
-    <div>
-      <div className="mb-2 flex items-center justify-between gap-3">
-        <h3 className="text-sm font-medium text-white">{title}</h3>
-        <span className="text-xs text-zinc-500">{rows.length} leaks</span>
-      </div>
-
+    <ScannerSection title={title} summary={summary}>
       {rows.length === 0 ? (
         <JsonBlock value={raw} />
       ) : (
@@ -569,6 +671,6 @@ function GitleaksFindings({
           })}
         </div>
       )}
-    </div>
+    </ScannerSection>
   );
 }
