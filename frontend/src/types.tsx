@@ -58,7 +58,7 @@ export type HealthReport = {
 export type FindingsSection = {
   key: string;
   title: string;
-  kind: "semgrep" | "trivy" | "syft" | "generic";
+  kind: "semgrep" | "trivy" | "syft" | "gitleaks" | "generic";
   items: unknown[];
   raw: unknown;
 };

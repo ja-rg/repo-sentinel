@@ -2,6 +2,23 @@ import { isSyftSbom } from "../tools/syft";
 import type { HealthReport, FindingsSection, HealthCheck } from "../types";
 import { parseJson } from "./json";
 
+function isGitleaksFinding(value: unknown) {
+  if (!value || typeof value !== "object") return false;
+
+  const item = value as Record<string, unknown>;
+
+  return (
+    typeof item.RuleID === "string" &&
+    typeof item.Description === "string" &&
+    typeof item.File === "string" &&
+    ("StartLine" in item || "EndLine" in item || "Secret" in item)
+  );
+}
+
+function isGitleaksReport(value: unknown) {
+  return Array.isArray(value) && value.some(isGitleaksFinding);
+}
+
 export function normalizeHealth(raw: unknown): HealthReport | null {
   if (!raw || typeof raw !== "object") return null;
   const data = raw as Record<string, unknown>;
@@ -53,8 +70,21 @@ export function normalizeHealth(raw: unknown): HealthReport | null {
     checks: normalizedChecks,
   };
 }
+
 export function normalizeFindings(raw: unknown): FindingsSection[] {
   const parsed = parseJson(raw);
+
+  if (isGitleaksReport(parsed)) {
+    return [
+      {
+        key: "gitleaks",
+        title: "gitleaks",
+        kind: "gitleaks",
+        items: parsed as unknown[],
+        raw: parsed,
+      },
+    ];
+  }
 
   if (Array.isArray(parsed)) {
     return [
@@ -79,9 +109,11 @@ export function normalizeFindings(raw: unknown): FindingsSection[] {
           ? "semgrep"
           : key === "trivy"
             ? "trivy"
-            : isSyftSbom(value)
-              ? "syft"
-              : "generic";
+            : key === "gitleaks" || isGitleaksReport(value)
+              ? "gitleaks"
+              : isSyftSbom(value)
+                ? "syft"
+                : "generic";
 
       return {
         key,

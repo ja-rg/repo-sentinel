@@ -23,6 +23,16 @@ export function FindingsSectionView({ section }: { section: FindingsSection }) {
     );
   }
 
+  if (section.kind === "gitleaks") {
+    return (
+      <GitleaksFindings
+        title={section.title}
+        items={section.items}
+        raw={section.raw}
+      />
+    );
+  }
+
   if (section.kind === "syft") {
     return <SyftSbomFindings title={section.title} raw={section.raw} />;
   }
@@ -340,7 +350,7 @@ function TrivyFindings({
 
                   {String(match) && (
                     <pre className="mt-3 overflow-auto border border-zinc-800 bg-black p-3 text-xs leading-6 text-emerald-200">
-                      <code>{String(match)}</code>
+                      <code className="break-all">{String(match)}</code>
                     </pre>
                   )}
                 </div>
@@ -454,6 +464,99 @@ function GenericFindings({
         <span className="text-xs text-zinc-500">{count} items</span>
       </div>
       <JsonBlock value={raw} />
+    </div>
+  );
+}
+
+function GitleaksFindings({
+  title,
+  items,
+  raw,
+}: {
+  title: string;
+  items: unknown[];
+  raw: unknown;
+}) {
+  const rows = Array.isArray(items) ? items : [];
+
+  return (
+    <div>
+      <div className="mb-2 flex items-center justify-between gap-3">
+        <h3 className="text-sm font-medium text-white">{title}</h3>
+        <span className="text-xs text-zinc-500">{rows.length} leaks</span>
+      </div>
+
+      {rows.length === 0 ? (
+        <JsonBlock value={raw} />
+      ) : (
+        <div className="space-y-2">
+          {rows.map((entry, index) => {
+            const item = (entry ?? {}) as Record<string, unknown>;
+            const id = item.RuleID ?? "gitleaks-rule";
+            const description =
+              item.Description ?? item.RuleID ?? "Gitleaks finding";
+            const file = item.File ?? "unknown";
+            const startLine = item.StartLine;
+            const endLine = item.EndLine;
+            const match = item.Match;
+            const fingerprint = item.Fingerprint;
+            const tags = Array.isArray(item.Tags) ? item.Tags : [];
+
+            return (
+              <div
+                key={`${String(fingerprint ?? id)}-${index}`}
+                className="border border-zinc-800 p-3"
+              >
+                <div className="flex flex-wrap items-center gap-2">
+                  <span className="border border-zinc-700 px-2 py-1 text-[11px] uppercase tracking-wide text-zinc-300">
+                    secret
+                  </span>
+                  <span className="text-xs text-zinc-500">{String(id)}</span>
+                </div>
+
+                <p className="mt-2 text-sm text-white">{String(description)}</p>
+
+                <div className="mt-2 flex flex-wrap gap-x-4 gap-y-1 text-xs text-zinc-500">
+                  <span>{String(file)}</span>
+                  {typeof startLine === "number" && (
+                    <span>
+                      line {startLine}
+                      {typeof endLine === "number" && endLine !== startLine
+                        ? `-${endLine}`
+                        : ""}
+                    </span>
+                  )}
+                </div>
+
+                {tags.length > 0 ? (
+                  <div className="mt-2 flex flex-wrap gap-2">
+                    {tags.map((tag, tagIndex) => (
+                      <span
+                        key={`${String(tag)}-${tagIndex}`}
+                        className="border border-zinc-700 px-2 py-1 text-[11px] text-zinc-400"
+                      >
+                        {String(tag)}
+                      </span>
+                    ))}
+                  </div>
+                ) : null}
+
+                {match ? (
+                  <pre className="mt-3 overflow-auto border border-zinc-800 bg-black p-3 text-xs leading-6 text-emerald-200">
+                    <code className="break-all">{String(match)}</code>
+                  </pre>
+                ) : null}
+
+                {fingerprint ? (
+                  <div className="mt-3 break-all text-[11px] text-zinc-600">
+                    {String(fingerprint)}
+                  </div>
+                ) : null}
+              </div>
+            );
+          })}
+        </div>
+      )}
     </div>
   );
 }
