@@ -41,13 +41,21 @@ type HealthReport = {
   };
 };
 
-const REQUIRED_IMAGES = ["semgrep", "trivy", "grype", "nuclei", "syft"] as const;
+const REQUIRED_IMAGES = [
+  "semgrep",
+  "trivy",
+  "grype",
+  "nuclei",
+  "syft",
+] as const;
 const WORKER_FRESHNESS_SECONDS = 15;
 const WORKER_STALE_SECONDS = 60;
 
 async function runCommand(
   cmd: string[],
-): Promise<{ ok: boolean; stdout: string; stderr: string; exitCode: number | null }> {
+): Promise<
+  { ok: boolean; stdout: string; stderr: string; exitCode: number | null }
+> {
   try {
     const proc = Bun.spawn(cmd, {
       stdout: "pipe",
@@ -142,7 +150,12 @@ async function checkDockerImages(): Promise<HealthCheck> {
     };
   }
 
-  const result = await runCommand(["docker", "images", "--format", "{{.Repository}}:{{.Tag}}"]) ;
+  const result = await runCommand([
+    "docker",
+    "images",
+    "--format",
+    "{{.Repository}}:{{.Tag}}",
+  ]);
 
   if (!result.ok) {
     return {
@@ -171,7 +184,9 @@ async function checkDockerImages(): Promise<HealthCheck> {
     return { image: required, found };
   });
 
-  const missing = imageMatches.filter((item) => !item.found).map((item) => item.image);
+  const missing = imageMatches.filter((item) => !item.found).map((item) =>
+    item.image
+  );
 
   if (missing.length > 0) {
     return {
@@ -205,7 +220,12 @@ async function checkKubectl(): Promise<HealthCheck> {
     };
   }
 
-  const result = await runCommand(["kubectl", "version", "--client", "--output=json"]);
+  const result = await runCommand([
+    "kubectl",
+    "version",
+    "--client",
+    "--output=json",
+  ]);
   if (!result.ok) {
     return {
       key: "kubectl",
@@ -284,16 +304,25 @@ function buildWorkerHealth() {
 
   const freshnessExpr = `(strftime('%s','now') - strftime('%s', last_seen_at))`;
   const active_workers = Number(
-    (db.query(`SELECT COUNT(*) as count FROM worker_heartbeats WHERE ${freshnessExpr} <= ?1`).get(WORKER_FRESHNESS_SECONDS) as { count: number } | undefined)?.count ?? 0,
+    (db.query(
+      `SELECT COUNT(*) as count FROM worker_heartbeats WHERE ${freshnessExpr} <= ?1`,
+    ).get(WORKER_FRESHNESS_SECONDS) as { count: number } | undefined)?.count ??
+      0,
   );
   const stale_workers = Number(
-    (db.query(`SELECT COUNT(*) as count FROM worker_heartbeats WHERE ${freshnessExpr} > ?1 AND ${freshnessExpr} <= ?2`).get(WORKER_FRESHNESS_SECONDS, WORKER_STALE_SECONDS) as { count: number } | undefined)?.count ?? 0,
+    (db.query(
+      `SELECT COUNT(*) as count FROM worker_heartbeats WHERE ${freshnessExpr} > ?1 AND ${freshnessExpr} <= ?2`,
+    ).get(WORKER_FRESHNESS_SECONDS, WORKER_STALE_SECONDS) as
+      | { count: number }
+      | undefined)?.count ?? 0,
   );
 
   if (active_workers > 0) {
     return {
       status: "pass" as const,
-      summary: `${active_workers} active worker${active_workers === 1 ? "" : "s"}`,
+      summary: `${active_workers} active worker${
+        active_workers === 1 ? "" : "s"
+      }`,
       active_workers,
       stale_workers,
       workers,
@@ -319,7 +348,10 @@ function buildWorkerHealth() {
   };
 }
 
-function overallStatus(checks: HealthCheck[], workerStatus: CheckState): CheckState {
+function overallStatus(
+  checks: HealthCheck[],
+  workerStatus: CheckState,
+): CheckState {
   const states = [...checks.map((check) => check.status), workerStatus];
   if (states.includes("fail")) return "fail";
   if (states.includes("warn")) return "warn";

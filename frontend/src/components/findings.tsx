@@ -144,7 +144,6 @@ function SyftSbomFindings({ title, raw }: { title: string; raw: unknown }) {
     <ScannerSection
       title={title}
       summary={`SBOM · ${String(bomFormat)} ${String(specVersion)} · ${components.length} components`}
-      defaultOpen
     >
       <div className="space-y-3">
         <div className="border border-zinc-800 p-3">
