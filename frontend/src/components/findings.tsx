@@ -2,6 +2,18 @@ import { flattenTrivy } from "../tools/trivy";
 import type { FindingsSection } from "../types";
 import { JsonBlock } from "../utilities/json";
 
+function CodeTextBlock({ value }: { value: unknown }) {
+  if (value == null) return null;
+
+  return (
+    <div className="mt-3 border border-zinc-800 bg-black p-3 text-xs leading-6 text-emerald-200">
+      <code className="block whitespace-pre-wrap break-all overflow-hidden">
+        {String(value)}
+      </code>
+    </div>
+  );
+}
+
 export function FindingsSectionView({ section }: { section: FindingsSection }) {
   if (section.kind === "semgrep") {
     return (
@@ -328,13 +340,15 @@ function TrivyFindings({
                     <span className="border border-zinc-700 px-2 py-1 text-[11px] uppercase tracking-wide text-zinc-300">
                       secret
                     </span>
-                    <span className="text-xs text-zinc-500">{String(id)}</span>
+                    <span className="text-xs text-zinc-500 break-all">
+                      {String(id)}
+                    </span>
                   </div>
 
                   <p className="mt-2 text-sm text-white">{String(titleText)}</p>
 
                   <div className="mt-2 flex flex-wrap gap-x-4 gap-y-1 text-xs text-zinc-500">
-                    <span>{String(target)}</span>
+                    <span className="break-all">{String(target)}</span>
                     {String(item.Category) && (
                       <span>{String(item.Category)}</span>
                     )}
@@ -348,11 +362,7 @@ function TrivyFindings({
                     )}
                   </div>
 
-                  {String(match) && (
-                    <pre className="mt-3 overflow-auto border border-zinc-800 bg-black p-3 text-xs leading-6 text-emerald-200">
-                      <code className="break-all">{String(match)}</code>
-                    </pre>
-                  )}
+                  {match ? <CodeTextBlock value={match} /> : null}
                 </div>
               );
             }
@@ -375,13 +385,15 @@ function TrivyFindings({
                     <span className="border border-zinc-700 px-2 py-1 text-[11px] uppercase tracking-wide text-zinc-300">
                       misconfiguration
                     </span>
-                    <span className="text-xs text-zinc-500">{String(id)}</span>
+                    <span className="text-xs text-zinc-500 break-all">
+                      {String(id)}
+                    </span>
                   </div>
 
                   <p className="mt-2 text-sm text-white">{String(titleText)}</p>
 
                   <div className="mt-2 flex flex-wrap gap-x-4 gap-y-1 text-xs text-zinc-500">
-                    <span>{String(target)}</span>
+                    <span className="break-all">{String(target)}</span>
                     {String(item.Resolution) && (
                       <span>{String(item.Resolution)}</span>
                     )}
@@ -426,13 +438,15 @@ function TrivyFindings({
                   <span className="border border-zinc-700 px-2 py-1 text-[11px] uppercase tracking-wide text-zinc-300">
                     vulnerability
                   </span>
-                  <span className="text-xs text-zinc-500">{String(id)}</span>
+                  <span className="text-xs text-zinc-500 break-all">
+                    {String(id)}
+                  </span>
                 </div>
 
                 <p className="mt-2 text-sm text-white">{String(titleText)}</p>
 
                 <div className="mt-2 flex flex-wrap gap-x-4 gap-y-1 text-xs text-zinc-500">
-                  <span>{String(target)}</span>
+                  <span className="break-all">{String(target)}</span>
                   {String(installedVersion) && (
                     <span>installed: {String(installedVersion)}</span>
                   )}
@@ -511,13 +525,15 @@ function GitleaksFindings({
                   <span className="border border-zinc-700 px-2 py-1 text-[11px] uppercase tracking-wide text-zinc-300">
                     secret
                   </span>
-                  <span className="text-xs text-zinc-500">{String(id)}</span>
+                  <span className="text-xs text-zinc-500 break-all">
+                    {String(id)}
+                  </span>
                 </div>
 
                 <p className="mt-2 text-sm text-white">{String(description)}</p>
 
                 <div className="mt-2 flex flex-wrap gap-x-4 gap-y-1 text-xs text-zinc-500">
-                  <span>{String(file)}</span>
+                  <span className="break-all">{String(file)}</span>
                   {typeof startLine === "number" && (
                     <span>
                       line {startLine}
@@ -541,14 +557,10 @@ function GitleaksFindings({
                   </div>
                 ) : null}
 
-                {match ? (
-                  <pre className="mt-3 overflow-auto border border-zinc-800 bg-black p-3 text-xs leading-6 text-emerald-200">
-                    <code className="break-all">{String(match)}</code>
-                  </pre>
-                ) : null}
+                {match ? <CodeTextBlock value={match} /> : null}
 
                 {fingerprint ? (
-                  <div className="mt-3 break-all text-[11px] text-zinc-600">
+                  <div className="mt-3 break-all text-[11px] text-zinc-600 uppercase tracking-wide">
                     {String(fingerprint)}
                   </div>
                 ) : null}
