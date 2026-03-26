@@ -1,4 +1,5 @@
 import { Hono } from "hono";
+import { cors } from "hono/cors";
 import { insertRun, listRuns, getRun } from "./src/api/db-actions";
 import { isValidKind, parseCreateRunRequest, rowToApi } from "./src/api/request-utilities";
 import { buildHealthReport } from "./src/api/health-helper";
@@ -7,6 +8,9 @@ import { join } from "node:path";
 import { DATA_DIR, DB_PATH } from "./src/db";
 
 const app = new Hono();
+
+// CORS middleware - allow all origins for simplicity
+app.use("*", cors());
 
 // Health
 app.get("/health", async c => {

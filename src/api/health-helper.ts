@@ -21,7 +21,7 @@ type HealthReport = {
   };
 };
 
-const REQUIRED_IMAGES = ["semgrep", "trivy", "grype", "nuclei"] as const;
+const REQUIRED_IMAGES = ["semgrep", "trivy", "grype", "nuclei", "syft"] as const;
 
 async function runCommand(
   cmd: string[],

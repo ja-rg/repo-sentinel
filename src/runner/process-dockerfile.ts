@@ -1,7 +1,8 @@
-import { $ } from "bun";
 import { dockerRun } from "./docker";
-import { markRunDone, markRunDoneQuery, type Run } from "./update-runs";
+import { type Run } from "./update-runs";
 import { DATA_DIR } from "../db";
+import { rm } from "node:fs/promises";
+
 
 export async function processDockerfile(run: Run) {
     const dockerfilePath = `${DATA_DIR}/runs/${run.id}/Dockerfile`;
@@ -11,6 +12,11 @@ export async function processDockerfile(run: Run) {
     if (!exists) {
         throw new Error(`Dockerfile not found for run ${run.id}`);
     }
+
+    const volumes = [{
+        hostPath: `${DATA_DIR}/runs/${run.id}`,
+        containerPath: "/data"
+    }];
 
     // 2. Basic validity checks
     const dockerfileContent = await Bun.file(dockerfilePath).text();
@@ -28,13 +34,13 @@ export async function processDockerfile(run: Run) {
     }
 
     // 3. Analyze with Semgrep
-    const findings: unknown[] = [];
+    const findings: Record<string, unknown> = {};
 
     try {
         const proc = dockerRun(
-            ["--config", "p/ci", "--json", "--no-git-ignore", "/data"],
-            "returntocorp/semgrep:latest",
-            { [`${$.cwd()} /data/${run.id} `]: "/data" }
+            ["semgrep", "--config", "p/dockerfile", "--json", "--no-git-ignore", "/data"],
+            "semgrep/semgrep:latest",
+            volumes
         );
 
         const outputText = await proc.stdout.text();
@@ -46,12 +52,38 @@ export async function processDockerfile(run: Run) {
             throw new Error(`Semgrep failed with exit code ${exitCode}: ${errText} `);
         }
 
-        const parsed = JSON.parse(outputText);
-        findings.push(...(parsed.results ?? []));
+        const semgrep = JSON.parse(outputText);
+        findings["semgrep"] = semgrep.results || [];
+
+
+        // Trivy
+        // docker run --rm -v ./data/runs/1/:/project aquasec/trivy:latest --format json config /project --file-patterns "dockerfile:Dockerfile*
+        const trivyProc = dockerRun(
+            ["--quiet", "--format", "json", "config", "/data", "--file-patterns", "dockerfile:Dockerfile*"],
+            "aquasec/trivy:latest",
+            volumes
+        );
+
+        const trivyOutputText = await trivyProc.stdout.text();
+
+        const trivyExitCode = await trivyProc.exited;
+        if (trivyExitCode !== 0) {
+            const errText = trivyProc.stderr ?? "";
+            throw new Error(`Trivy failed with exit code ${trivyExitCode}: ${errText} `);
+        }
+        const trivyResults = JSON.parse(trivyOutputText);
+        findings["trivy"] = trivyResults.Results || [];
     } catch (err) {
         console.error(`Error running Semgrep for run ${run.id}: `, err);
-        throw new Error(`Error analyzing Dockerfile for run ${run.id}`);
+        throw new Error(`Error analyzing Dockerfile for run ${run.id}: ${err}`);
     }
 
-    markRunDone(run.id, JSON.stringify(findings), JSON.stringify({}));
+    // Remove the folder with the Dockerfile to save space
+    try {
+        await rm(`${DATA_DIR}/runs/${run.id}`, { recursive: true, force: true });
+    } catch (err) {
+        console.warn(`Failed to clean up Dockerfile data for run ${run.id}: `, err);
+    }
+
+    return findings;
 }

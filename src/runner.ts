@@ -11,24 +11,28 @@ while (true) {
     continue;
   }
 
+  let findings = {}, decision: Record<string, unknown> = {};
+
   try {
     switch (run.kind) {
       case "dockerfile":
-        await processDockerfile(run);
+        findings = await processDockerfile(run);
         break;
       case "image":
-        await processImage(run);
+        findings = await processImage(run);
         break;
       case "repo":
       case "archive":
-        await processRepoOrArchive(run);
+        findings = await processRepoOrArchive(run);
         break;
       case "k8s_manifest":
-        await processManifest(run);
+        [findings, decision] = await processManifest(run);
         break;
       default:
         throw new Error(`Unknown run kind: ${run.kind}`);
     }
+    markRunDone(run.id, JSON.stringify(findings), JSON.stringify(decision));
+
   } catch (err) {
     markRunFailed(run.id, String(err));
   }
