@@ -2,8 +2,9 @@ import { readdir, rm } from "node:fs/promises";
 import { join, extname } from "node:path";
 import { spawn } from "bun";
 import { dockerRun } from "./docker";
-import type { Run } from "./update-runs";
+import { type Run, setRunStage } from "./update-runs";
 import { DATA_DIR } from "../db";
+import { logRun } from "../api/worker-manager";
 
 type FindingSeverity = "info" | "low" | "medium" | "high" | "critical";
 
@@ -33,10 +34,12 @@ export async function processManifest(
     let findings: Finding[] = [];
     let applied = false;
     let exposedUrl: string | null = null;
+    let manifestPath: string | null = null;
 
     try {
+        setRunStage(run.id, "validating-manifest", "Validating uploaded manifest");
         // 1. Find uploaded manifest
-        const manifestPath = await findSingleUploadedFile(runDir);
+        manifestPath = await findSingleUploadedFile(runDir);
         // 2. Validate manifest file
         if (!manifestPath) {
             throw new Error(`No manifest file found for run ${run.id}`);
@@ -45,10 +48,19 @@ export async function processManifest(
         await validateManifestFile(manifestPath, run.id);
 
         // 2. Static analysis
+        setRunStage(run.id, "static-analysis", "Running manifest static analysis");
+        logRun(run.id, "info", "Manifest static analysis started", {
+            stage: "static-analysis",
+        });
         const staticFindings = await runStaticManifestAnalysis(manifestPath, run.id);
         findings.push(...staticFindings);
+        logRun(run.id, "info", "Manifest static analysis finished", {
+            stage: "static-analysis",
+            details: { resultCount: staticFindings.length },
+        });
 
         if (hasBlockingManifestFindings(staticFindings)) {
+            setRunStage(run.id, "completed", "Manifest rejected after static analysis");
             return [
                 findings,
                 {
@@ -62,13 +74,16 @@ export async function processManifest(
         }
 
         // 3. Apply to cluster
+        setRunStage(run.id, "applying", "Applying manifest to cluster");
         await kubectlApply(manifestPath, run.id);
         applied = true;
 
         // 4. Wait for workload/service readiness
+        setRunStage(run.id, "waiting-readiness", "Waiting for workload readiness");
         await waitForManifestResources(manifestPath, run.id);
 
         // 5. Resolve service URL
+        setRunStage(run.id, "resolving-service", "Resolving service URL");
         exposedUrl = await resolveManifestServiceUrl(manifestPath, run.id);
         if (!exposedUrl) {
             findings.push({
@@ -80,7 +95,9 @@ export async function processManifest(
                     "Manifest was applied, but no reachable service URL could be resolved through Minikube.",
             });
 
+                    setRunStage(run.id, "teardown", "Tearing down deployment after unresolved service URL");
             await kubectlDelete(manifestPath, run.id).catch(() => { });
+                    setRunStage(run.id, "completed", "Manifest processing completed with teardown");
             return [
                 findings,
                 {
@@ -94,11 +111,22 @@ export async function processManifest(
         }
 
         // 6. Runtime scan with Nuclei
+        setRunStage(run.id, "runtime-scan", "Running runtime scan");
+        logRun(run.id, "info", "Nuclei runtime scan started", {
+            stage: "runtime-scan",
+            details: { target: exposedUrl },
+        });
         const runtimeFindings = await runNucleiScan(exposedUrl, run.id);
         findings.push(...runtimeFindings);
+        logRun(run.id, "info", "Nuclei runtime scan finished", {
+            stage: "runtime-scan",
+            details: { resultCount: runtimeFindings.length, target: exposedUrl },
+        });
 
         if (hasBlockingRuntimeFindings(runtimeFindings)) {
+            setRunStage(run.id, "teardown", "Tearing down deployment after runtime findings");
             await kubectlDelete(manifestPath, run.id).catch(() => { });
+            setRunStage(run.id, "completed", "Manifest processing completed with teardown");
             return [
                 findings,
                 {
@@ -112,6 +140,7 @@ export async function processManifest(
         }
 
         // 7. Safe enough to keep
+        setRunStage(run.id, "completed", "Manifest processing completed");
         return [
             findings,
             {
@@ -123,10 +152,16 @@ export async function processManifest(
             },
         ];
     } catch (err) {
+        setRunStage(run.id, "error", "Manifest processing failed");
+        logRun(run.id, "error", "Manifest processing failed", {
+            stage: "error",
+            details: { error: String(err) },
+        });
+
         if (applied) {
             try {
-                const manifestPath = await findSingleUploadedFile(runDir);
                 if (manifestPath) {
+                    setRunStage(run.id, "teardown", "Tearing down deployment after failure");
                     await kubectlDelete(manifestPath, run.id);
                 }
             } catch {
@@ -162,7 +197,7 @@ export async function processManifest(
     }
 }
 
-async function findSingleUploadedFile(runDir: string) {
+async function findSingleUploadedFile(runDir: string): Promise<string> {
     const entries = await readdir(runDir, { withFileTypes: true });
     const files = entries
         .filter((entry) => entry.isFile())
@@ -176,7 +211,12 @@ async function findSingleUploadedFile(runDir: string) {
         throw new Error(`Expected exactly one uploaded manifest in ${runDir}, found ${files.length}`);
     }
 
-    return files[0];
+    const single = files[0];
+    if (!single) {
+        throw new Error(`No uploaded manifest found in ${runDir}`);
+    }
+
+    return single;
 }
 
 async function validateManifestFile(manifestPath: string, runId: number) {

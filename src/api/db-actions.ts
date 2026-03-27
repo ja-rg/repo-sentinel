@@ -70,6 +70,24 @@ db.run(`
   ON worker_heartbeats(last_seen_at)
 `);
 
+db.run(`
+  CREATE TABLE IF NOT EXISTS analysis_run_logs (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    run_id INTEGER NOT NULL,
+    level TEXT NOT NULL CHECK (level IN ('debug','info','warn','error')),
+    stage TEXT,
+    message TEXT NOT NULL,
+    details_json TEXT,
+    created_at TEXT NOT NULL DEFAULT (datetime('now')),
+    FOREIGN KEY (run_id) REFERENCES analysis_runs(id)
+  )
+`);
+
+db.run(`
+  CREATE INDEX IF NOT EXISTS idx_analysis_run_logs_run_id_created_at
+  ON analysis_run_logs(run_id, created_at)
+`);
+
 export const insertRun = db.query(`
   INSERT INTO analysis_runs (kind, input_ref, status)
   VALUES (?1, ?2, 'pending')
@@ -187,35 +205,17 @@ export const upsertWorkerHeartbeat = db.query(`
     details_json = excluded.details_json
 `);
 
-export const listWorkerHeartbeats = db.query(`
-  SELECT
-    worker_id,
-    pid,
-    status,
-    current_run_id,
-    hostname,
-    started_at,
-    last_seen_at,
-    details_json
-  FROM worker_heartbeats
-  ORDER BY last_seen_at DESC
+export const insertRunLog = db.query(`
+  INSERT INTO analysis_run_logs (run_id, level, stage, message, details_json)
+  VALUES (?1, ?2, ?3, ?4, ?5)
+  RETURNING id, run_id, level, stage, message, details_json, created_at
 `);
 
-export const getWorkerHeartbeat = db.query(`
+export const listRunLogs = db.query(`
   SELECT
-    worker_id,
-    pid,
-    status,
-    current_run_id,
-    hostname,
-    started_at,
-    last_seen_at,
-    details_json
-  FROM worker_heartbeats
-  WHERE worker_id = ?1
-`);
-
-export const deleteStaleWorkerHeartbeats = db.query(`
-  DELETE FROM worker_heartbeats
-  WHERE last_seen_at < datetime('now', ?1)
+    id, run_id, level, stage, message, details_json, created_at
+  FROM analysis_run_logs
+  WHERE run_id = ?1
+  ORDER BY id ASC
+  LIMIT ?2
 `);

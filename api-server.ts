@@ -2,7 +2,7 @@ import { Hono } from "hono";
 import { cors } from "hono/cors";
 import { mkdirSync } from "node:fs";
 import { join } from "node:path";
-import { getRun, insertRun, listRuns } from "./src/api/db-actions";
+import { getRun, insertRun, listRunLogs, listRuns } from "./src/api/db-actions";
 import { buildHealthReport } from "./src/api/health-helper";
 import {
   isValidKind,
@@ -162,6 +162,18 @@ app.get("/analysis-runs/:id", (c) => {
   }
 
   return c.json(rowToApi(row));
+});
+
+app.get("/analysis-runs/:id/logs", (c) => {
+  const idRaw = c.req.param("id");
+  const id = Number(idRaw);
+
+  if (!Number.isInteger(id) || id <= 0) {
+    return c.json({ error: "Invalid analysis run id" }, 400);
+  }
+
+  const rows = listRunLogs.all(id).map(rowToApi);
+  return c.json(rows);
 });
 
 app.use("/assets/*", serveStatic({ root: "./dist" }));

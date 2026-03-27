@@ -4,8 +4,9 @@ import { join, extname } from "node:path";
 import { spawn } from "bun";
 
 import { dockerRun } from "./docker";
-import type { Run } from "./update-runs";
+import { type Run, setRunStage } from "./update-runs";
 import { DATA_DIR } from "../db";
+import { logRun } from "../api/worker-manager";
 
 type Findings = Record<string, unknown>;
 
@@ -19,9 +20,15 @@ export async function processRepoOrArchive(run: Run) {
 
     try {
         if (run.kind === "repo") {
+            setRunStage(run.id, "cloning-repo", "Cloning repository");
             scanTarget = join(workspaceDir, "repo");
             await cloneRepo(run.input_ref, scanTarget);
+            logRun(run.id, "info", "Repository clone completed", {
+                stage: "cloning-repo",
+                details: { scanTarget },
+            });
         } else if (run.kind === "archive") {
+            setRunStage(run.id, "extracting-archive", "Extracting uploaded archive");
             const archivePath = await findSingleUploadedFile(runDir);
             if (!archivePath) {
                 throw new Error(`No archive file found for run ${run.id}`);
@@ -30,6 +37,10 @@ export async function processRepoOrArchive(run: Run) {
             scanTarget = join(workspaceDir, "archive");
             await mkdir(scanTarget, { recursive: true });
             await extractArchive(archivePath, scanTarget);
+            logRun(run.id, "info", "Archive extraction completed", {
+                stage: "extracting-archive",
+                details: { archivePath, scanTarget },
+            });
         } else {
             throw new Error(`processRepoOrArchive received unsupported kind: ${run.kind}`);
         }
@@ -41,16 +52,69 @@ export async function processRepoOrArchive(run: Run) {
 
         const findings: Findings = {};
 
+        setRunStage(run.id, "running-semgrep", "Running Semgrep");
+        logRun(run.id, "info", "Semgrep started", { stage: "running-semgrep" });
         findings["semgrep"] = await runSemgrep(scanTarget, run.id);
+        logRun(run.id, "info", "Semgrep finished", {
+            stage: "running-semgrep",
+            details: { resultCount: Array.isArray(findings["semgrep"]) ? findings["semgrep"].length : 0 },
+        });
+
+        setRunStage(run.id, "running-trivy", "Running Trivy");
+        logRun(run.id, "info", "Trivy started", { stage: "running-trivy" });
         findings["trivy"] = await runTrivyFs(scanTarget, run.id);
+        logRun(run.id, "info", "Trivy finished", {
+            stage: "running-trivy",
+            details: { resultCount: Array.isArray(findings["trivy"]) ? findings["trivy"].length : 0 },
+        });
+
+        setRunStage(run.id, "running-gitleaks", "Running Gitleaks");
+        logRun(run.id, "info", "Gitleaks started", { stage: "running-gitleaks" });
         findings["gitleaks"] = await runGitleaks(scanTarget, run.id);
+        logRun(run.id, "info", "Gitleaks finished", {
+            stage: "running-gitleaks",
+            details: { resultCount: Array.isArray(findings["gitleaks"]) ? findings["gitleaks"].length : 0 },
+        });
+
+        setRunStage(run.id, "running-syft", "Running Syft");
+        logRun(run.id, "info", "Syft started", { stage: "running-syft" });
         findings["syft"] = await runSyft(scanTarget, run.id);
+
+        const syftComponentCount =
+            typeof findings["syft"] === "object" && findings["syft"] !== null
+                ? Array.isArray((findings["syft"] as { components?: unknown[] }).components)
+                    ? (findings["syft"] as { components: unknown[] }).components.length
+                    : undefined
+                : undefined;
+
+        logRun(run.id, "info", "Syft finished", {
+            stage: "running-syft",
+            details: syftComponentCount == null ? undefined : { componentCount: syftComponentCount },
+        });
+
+        setRunStage(run.id, "completed", "Repository/archive processing completed");
         return findings;
+    } catch (err) {
+        setRunStage(run.id, "error", "Repository/archive processing failed");
+        logRun(run.id, "error", "Repository/archive processing failed", {
+            stage: "error",
+            details: { error: String(err) },
+        });
+        throw err;
     } finally {
         try {
+            setRunStage(run.id, "cleanup", "Cleaning up run workspace");
             await rm(runDir, { recursive: true, force: true });
+            logRun(run.id, "info", "Run workspace cleanup completed", {
+                stage: "cleanup",
+                details: { runDir },
+            });
         } catch (err) {
             console.warn(`Failed to clean up run directory for run ${run.id}:`, err);
+            logRun(run.id, "warn", "Run workspace cleanup failed", {
+                stage: "cleanup",
+                details: { runDir, error: String(err) },
+            });
         }
     }
 }

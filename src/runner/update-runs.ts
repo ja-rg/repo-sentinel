@@ -1,4 +1,5 @@
 import { rowToApi } from "../api/request-utilities";
+import { logRun } from "../api/worker-manager";
 import { db } from "../db";
 
 const claimNextPendingRunQuery = db.query(`
@@ -18,7 +19,6 @@ const claimNextPendingRunQuery = db.query(`
     findings_json, decision_json, error_text,
     created_at, started_at, finished_at
 `);
-
 
 const markRunFailedQuery = db.query(`
   UPDATE analysis_runs
@@ -90,11 +90,19 @@ export function markRunStage(runId: number, stage: string): Run | null {
 export function markRunDone(
   runId: number,
   findings?: unknown,
-  decision?: unknown
+  decision?: unknown,
 ): Run | null {
   const findingsJson = findings == null ? null : JSON.stringify(findings);
   const decisionJson = decision == null ? null : JSON.stringify(decision);
 
   const row = markRunDoneQuery.get(runId, findingsJson, decisionJson);
   return row ? rowToApi(row) : null;
+}
+
+export function setRunStage(runId: number, stage: string, message?: string) {
+  markRunStage(runId, stage);
+
+  if (message) {
+    logRun(runId, "info", message, { stage });
+  }
 }

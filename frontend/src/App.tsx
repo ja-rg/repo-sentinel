@@ -1,5 +1,16 @@
 import React, { useEffect, useMemo, useRef, useState } from "react";
 import type { RunKind, AnalysisRun, HealthReport } from "./types";
+
+interface RunLog {
+  id: number;
+  run_id: number;
+  created_at: string;
+  level: "debug" | "info" | "warn" | "error";
+  stage: string | null;
+  message: string;
+  details_json: string | null;
+}
+
 import { cn, parseJson } from "./utilities/json";
 import { formatDateTime, toneForRunStatus } from "./utilities/format";
 import { FindingsSectionView } from "./components/findings";
@@ -88,6 +99,8 @@ function App() {
 
   const currentMeta = kindMeta[kind];
 
+  const [runLogs, setRunLogs] = useState<RunLog[]>([]);
+
   useEffect(() => {
     selectedRunIdRef.current = selectedRun?.id ?? null;
   }, [selectedRun]);
@@ -147,6 +160,12 @@ function App() {
     } finally {
       setSelectedRunLoading(false);
     }
+  }
+
+  async function loadRunLogs(id: number) {
+    const res = await fetch(`${API_BASE}/analysis-runs/${id}/logs`);
+    const data = await res.json();
+    setRunLogs(Array.isArray(data) ? data : []);
   }
 
   async function ensureWorker() {
@@ -230,6 +249,7 @@ function App() {
       loadRuns();
       if (selectedRunIdRef.current) {
         loadRunById(selectedRunIdRef.current);
+        loadRunLogs(selectedRunIdRef.current);
       }
     }, POLL_MS);
 
@@ -245,8 +265,7 @@ function App() {
     () => parseJson(selectedRun?.decision_json),
     [selectedRun],
   );
-  
-  
+
   return (
     <div className="min-h-screen bg-zinc-950 text-zinc-100">
       <main className="mx-auto max-w-7xl px-4 py-4 sm:px-6 lg:px-8">
@@ -474,6 +493,33 @@ function App() {
                   {selectedRun.error_text && (
                     <div className="mt-4 border border-rose-500/30 bg-rose-500/10 p-3 text-sm text-rose-200">
                       {selectedRun.error_text}
+                    </div>
+                  )}
+                </Subsection>
+
+                <Subsection title="Execution log">
+                  {runLogs.length === 0 ? (
+                    <EmptyState message="No logs yet." compact />
+                  ) : (
+                    <div className="space-y-2">
+                      {runLogs.map((log) => (
+                        <div
+                          key={log.id}
+                          className="border border-zinc-800 p-3 text-sm"
+                        >
+                          <div className="flex items-center justify-between gap-3 text-xs text-zinc-500">
+                            <span>{log.created_at}</span>
+                            <span>{log.level}</span>
+                            <span>{log.stage || "—"}</span>
+                          </div>
+                          <p className="mt-2 text-zinc-200">{log.message}</p>
+                          {log.details_json && (
+                            <div className="mt-2">
+                              <JsonBlock value={parseJson(log.details_json)} />
+                            </div>
+                          )}
+                        </div>
+                      ))}
                     </div>
                   )}
                 </Subsection>
