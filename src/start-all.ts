@@ -1,4 +1,9 @@
 const children = [
+  // Add a cd frontend/ && bun run build step for the frontend if you have one
+  Bun.spawn(["cd", "frontend/", "&&", "bun", "run", "build"], {
+    stdout: "inherit",
+    stderr: "inherit",
+  }),
   Bun.spawn(["bun", "run", "api-server.ts"], {
     stdout: "inherit",
     stderr: "inherit",
