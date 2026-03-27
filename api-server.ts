@@ -172,7 +172,9 @@ app.get("/analysis-runs/:id/logs", (c) => {
     return c.json({ error: "Invalid analysis run id" }, 400);
   }
 
-  const rows = listRunLogs.all(id).map(rowToApi);
+  const LOG_LIMIT = 1000;
+
+  const rows = listRunLogs.all(id, LOG_LIMIT).map(rowToApi);
   return c.json(rows);
 });
 
