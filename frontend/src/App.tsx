@@ -498,30 +498,39 @@ function App() {
                 </Subsection>
 
                 <Subsection title="Execution log">
-                  {runLogs.length === 0 ? (
-                    <EmptyState message="No logs yet." compact />
-                  ) : (
-                    <div className="space-y-2">
-                      {runLogs.map((log) => (
-                        <div
-                          key={log.id}
-                          className="border border-zinc-800 p-3 text-sm"
-                        >
-                          <div className="flex items-center justify-between gap-3 text-xs text-zinc-500">
-                            <span>{log.created_at}</span>
-                            <span>{log.level}</span>
-                            <span>{log.stage || "—"}</span>
-                          </div>
-                          <p className="mt-2 text-zinc-200">{log.message}</p>
-                          {log.details_json && (
-                            <div className="mt-2">
-                              <JsonBlock value={parseJson(log.details_json)} />
+                  <details className="group">
+                    <summary className="cursor-pointer select-none p-3 text-sm font-medium hover:bg-zinc-900">
+                      {runLogs.length === 0
+                        ? "No logs yet"
+                        : `${runLogs.length} log entries`}
+                    </summary>
+                    <div className="space-y-2 p-3">
+                      {runLogs.length === 0 ? (
+                        <EmptyState message="No logs yet." compact />
+                      ) : (
+                        runLogs.map((log) => (
+                          <div
+                            key={log.id}
+                            className="border border-zinc-800 p-3 text-sm"
+                          >
+                            <div className="flex items-center justify-between gap-3 text-xs text-zinc-500">
+                              <span>{log.created_at}</span>
+                              <span>{log.level}</span>
+                              <span>{log.stage || "—"}</span>
                             </div>
-                          )}
-                        </div>
-                      ))}
+                            <p className="mt-2 text-zinc-200">{log.message}</p>
+                            {log.details_json && (
+                              <div className="mt-2">
+                                <JsonBlock
+                                  value={parseJson(log.details_json)}
+                                />
+                              </div>
+                            )}
+                          </div>
+                        ))
+                      )}
                     </div>
-                  )}
+                  </details>
                 </Subsection>
 
                 {selectedRun.kind === "k8s_manifest" && (
