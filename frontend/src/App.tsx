@@ -519,13 +519,6 @@ function App() {
                               <span>{log.stage || "—"}</span>
                             </div>
                             <p className="mt-2 text-zinc-200">{log.message}</p>
-                            {log.details_json && (
-                              <div className="mt-2">
-                                <JsonBlock
-                                  value={parseJson(log.details_json)}
-                                />
-                              </div>
-                            )}
                           </div>
                         ))
                       )}

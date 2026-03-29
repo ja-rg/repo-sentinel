@@ -265,7 +265,7 @@ async function runTrivyFs(scanTarget: string, runId: number) {
 
     const proc = dockerRun(
         ["fs", "--quiet", "--format", "json", "/project"],
-        "aquasec/trivy:latest",
+        "aquasec/trivy:canary",
         volumes
     );
 

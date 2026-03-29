@@ -68,12 +68,12 @@ export async function processDockerfile(run: Run) {
 
 
         // Trivy
-        // docker run --rm -v ./data/runs/1/:/project aquasec/trivy:latest --format json config /project --file-patterns "dockerfile:Dockerfile*
+        // docker run --rm -v ./data/runs/1/:/project aquasec/trivy:canary --format json config /project --file-patterns "dockerfile:Dockerfile*
         setRunStage(run.id, "running-trivy", "Running Trivy");
         logRun(run.id, "info", "Trivy started", { stage: "running-trivy" });
         const trivyProc = dockerRun(
             ["--quiet", "--format", "json", "config", "/data", "--file-patterns", "dockerfile:Dockerfile*"],
-            "aquasec/trivy:latest",
+            "aquasec/trivy:canary",
             volumes
         );
 

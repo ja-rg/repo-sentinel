@@ -138,7 +138,7 @@ async function runDockerInspect(imageRef: string, runId: number) {
 async function runTrivyImage(imageRef: string, runId: number) {
     const proc = dockerRun(
         ["image", "--quiet", "--format", "json", imageRef],
-        "aquasec/trivy:latest",
+        "aquasec/trivy:canary",
         [{ containerPath: "/var/run/docker.sock", hostPath: "/var/run/docker.sock" }]
     );
 
