@@ -199,6 +199,16 @@ export function FindingsSectionView({ section }: { section: FindingsSection }) {
     );
   }
 
+  if (section.kind === "grype") {
+    return (
+      <GrypeFindings
+        title={section.title}
+        items={section.items}
+        raw={section.raw}
+      />
+    );
+  }
+
   if (section.kind === "syft") {
     return <SyftSbomFindings title={section.title} raw={section.raw} />;
   }
@@ -1036,6 +1046,130 @@ function GitleaksFindings({
     </ScannerSection>
   );
 }
+
+function GrypeFindings({
+  title,
+  items,
+  raw,
+}: {
+  title: string;
+  items: unknown[];
+  raw: unknown;
+}) {
+  const rows = Array.isArray(items) ? items : [];
+  const pageSize = 50;
+  const [page, setPage] = useState(1);
+  const totalPages = Math.max(1, Math.ceil(rows.length / pageSize));
+  const safePage = Math.min(page, totalPages);
+  const pagedRows = useMemo(() => {
+    const start = (safePage - 1) * pageSize;
+    return rows.slice(start, start + pageSize);
+  }, [rows, safePage]);
+
+  const severityCounts = rows.reduce<Record<string, number>>(
+    (acc, entry) => {
+      const item = (entry ?? {}) as Record<string, unknown>;
+      const vuln =
+        item.vulnerability && typeof item.vulnerability === "object"
+          ? (item.vulnerability as Record<string, unknown>)
+          : {};
+      const severity = String(vuln.severity ?? "unknown").toLowerCase();
+      acc[severity] = (acc[severity] ?? 0) + 1;
+      return acc;
+    },
+    {},
+  );
+
+  const summary = [
+    `${rows.length} findings`,
+    severityCounts.critical ? `${severityCounts.critical} critical` : null,
+    severityCounts.high ? `${severityCounts.high} high` : null,
+    severityCounts.medium ? `${severityCounts.medium} medium` : null,
+  ]
+    .filter(Boolean)
+    .join(" · ");
+
+  return (
+    <ScannerSection title={title} summary={summary || "No findings"}>
+      {rows.length === 0 ? (
+        <JsonBlock value={raw} />
+      ) : (
+        <div className="space-y-2">
+          {pagedRows.map((entry, index) => {
+            const item = (entry ?? {}) as Record<string, unknown>;
+            const absoluteIndex = (safePage - 1) * pageSize + index;
+            const vuln =
+              item.vulnerability && typeof item.vulnerability === "object"
+                ? (item.vulnerability as Record<string, unknown>)
+                : {};
+            const artifact =
+              item.artifact && typeof item.artifact === "object"
+                ? (item.artifact as Record<string, unknown>)
+                : {};
+
+            const id = vuln.id ?? item.id ?? "grype-vuln";
+            const severity = String(vuln.severity ?? "unknown");
+            const description =
+              vuln.description ?? vuln.id ?? item.matchDetails ?? "Grype finding";
+            const packageName = artifact.name ?? item.package ?? "unknown";
+            const packageType = artifact.type ?? item.type ?? "package";
+            const installedVersion = artifact.version ?? item.version;
+            const fix =
+              item.fix && typeof item.fix === "object"
+                ? (item.fix as Record<string, unknown>)
+                : {};
+            const fixedVersion = fix.versions
+              ? Array.isArray(fix.versions)
+                ? (fix.versions as unknown[]).map(String).slice(0, 3).join(", ")
+                : String(fix.versions)
+              : "";
+
+            return (
+              <div
+                key={`${String(id)}-${absoluteIndex}`}
+                className="border border-zinc-800 p-3"
+              >
+                <div className="flex flex-wrap items-center gap-2">
+                  <span className="border border-zinc-700 px-2 py-1 text-[11px] uppercase tracking-wide text-zinc-300">
+                    {severity}
+                  </span>
+                  <span className="border border-zinc-700 px-2 py-1 text-[11px] uppercase tracking-wide text-zinc-300">
+                    {String(packageType)}
+                  </span>
+                  <span className="text-xs text-zinc-500 break-all">{String(id)}</span>
+                </div>
+
+                <p className="mt-2 text-sm text-white">{String(description)}</p>
+
+                <div className="mt-2 flex flex-wrap gap-x-4 gap-y-1 text-xs text-zinc-500">
+                  <span className="break-all">{String(packageName)}</span>
+                  {installedVersion ? (
+                    <span>installed: {String(installedVersion)}</span>
+                  ) : null}
+                  {fixedVersion ? <span>fixed: {fixedVersion}</span> : null}
+                </div>
+              </div>
+            );
+          })}
+
+          <PaginationControls
+            page={safePage}
+            totalPages={totalPages}
+            totalItems={rows.length}
+            pageSize={pageSize}
+            onPageChange={setPage}
+          />
+
+          <CodeTextBlock
+            value={JSON.stringify(raw, null, 2)}
+            label="Raw Grype JSON"
+          />
+        </div>
+      )}
+    </ScannerSection>
+  );
+}
+
 function DockerImageProfile({
   title,
   raw,

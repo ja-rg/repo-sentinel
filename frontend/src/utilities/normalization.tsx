@@ -121,6 +121,8 @@ export function normalizeFindings(raw: unknown): FindingsSection[] {
           ? "semgrep"
           : key === "trivy"
             ? "trivy"
+            : key === "grype"
+              ? "grype"
             : key === "gitleaks" || isGitleaksReport(value)
               ? "gitleaks"
               : isSyftSbom(value)
