@@ -1,3 +1,4 @@
+import { useMemo, useState } from "react";
 import { flattenTrivy } from "../tools/trivy";
 import type { FindingsSection } from "../types";
 import { JsonBlock } from "../utilities/json-block";
@@ -51,10 +52,10 @@ function CodeTextBlock({
               e.stopPropagation();
               downloadJson();
             }}
-            className="whitespace-nowrap text-zinc-400 hover:text-zinc-200 transition-colors"
+            className="whitespace-nowrap text-zinc-400 hover:text-zinc-200 transition-colors cursor-pointer text-xs"
             title="Download as JSON"
           >
-            ↓
+            ↓ Download
           </button>
         )}
       </summary>
@@ -107,6 +108,54 @@ const Badge = ({ children }: { children: React.ReactNode }) => (
     {children}
   </span>
 );
+
+function PaginationControls({
+  page,
+  totalPages,
+  totalItems,
+  pageSize,
+  onPageChange,
+}: {
+  page: number;
+  totalPages: number;
+  totalItems: number;
+  pageSize: number;
+  onPageChange: (page: number) => void;
+}) {
+  if (totalPages <= 1) return null;
+
+  const from = (page - 1) * pageSize + 1;
+  const to = Math.min(page * pageSize, totalItems);
+
+  return (
+    <div className="mt-3 flex flex-wrap items-center justify-between gap-3 border border-zinc-800 bg-black/40 px-3 py-2 text-xs text-zinc-400">
+      <span>
+        Showing {from}-{to} of {totalItems}
+      </span>
+      <div className="flex items-center gap-2">
+        <button
+          type="button"
+          onClick={() => onPageChange(page - 1)}
+          disabled={page <= 1}
+          className="border border-zinc-700 px-2 py-1 text-zinc-300 disabled:cursor-not-allowed disabled:opacity-40"
+        >
+          Prev
+        </button>
+        <span>
+          Page {page}/{totalPages}
+        </span>
+        <button
+          type="button"
+          onClick={() => onPageChange(page + 1)}
+          disabled={page >= totalPages}
+          className="border border-zinc-700 px-2 py-1 text-zinc-300 disabled:cursor-not-allowed disabled:opacity-40"
+        >
+          Next
+        </button>
+      </div>
+    </div>
+  );
+}
 
 function looksLikeDockerInspect(raw: unknown) {
   if (!raw || typeof raw !== "object") return false;
@@ -198,6 +247,17 @@ function SyftSbomFindings({ title, raw }: { title: string; raw: unknown }) {
       : null;
 
   const components = Array.isArray(data.components) ? data.components : [];
+  const componentsPageSize = 50;
+  const [componentsPage, setComponentsPage] = useState(1);
+  const componentsTotalPages = Math.max(
+    1,
+    Math.ceil(components.length / componentsPageSize),
+  );
+  const safeComponentsPage = Math.min(componentsPage, componentsTotalPages);
+  const pagedComponents = useMemo(() => {
+    const start = (safeComponentsPage - 1) * componentsPageSize;
+    return components.slice(start, start + componentsPageSize);
+  }, [components, safeComponentsPage]);
 
   return (
     <ScannerSection
@@ -321,11 +381,13 @@ function SyftSbomFindings({ title, raw }: { title: string; raw: unknown }) {
             <div className="text-sm text-zinc-500">No components.</div>
           ) : (
             <div className="space-y-2">
-              {components.slice(0, 25).map((component, index) => {
+              {pagedComponents.map((component, index) => {
                 const item = component as Record<string, unknown>;
+                const absoluteIndex =
+                  (safeComponentsPage - 1) * componentsPageSize + index;
                 return (
                   <div
-                    key={`${String(item["bom-ref"] ?? item.name ?? "component")}-${index}`}
+                    key={`${String(item["bom-ref"] ?? item.name ?? "component")}-${absoluteIndex}`}
                     className="border border-zinc-800 p-3"
                   >
                     <div className="flex flex-wrap items-center gap-2">
@@ -356,11 +418,13 @@ function SyftSbomFindings({ title, raw }: { title: string; raw: unknown }) {
                 );
               })}
 
-              {components.length > 25 ? (
-                <div className="text-xs text-zinc-500">
-                  Showing first 25 of {components.length} components
-                </div>
-              ) : null}
+              <PaginationControls
+                page={safeComponentsPage}
+                totalPages={componentsTotalPages}
+                totalItems={components.length}
+                pageSize={componentsPageSize}
+                onPageChange={setComponentsPage}
+              />
             </div>
           )}
         </div>
@@ -383,6 +447,14 @@ function SemgrepFindings({
   raw: unknown;
 }) {
   const rows = Array.isArray(items) ? items : [];
+  const pageSize = 50;
+  const [page, setPage] = useState(1);
+  const totalPages = Math.max(1, Math.ceil(rows.length / pageSize));
+  const safePage = Math.min(page, totalPages);
+  const pagedRows = useMemo(() => {
+    const start = (safePage - 1) * pageSize;
+    return rows.slice(start, start + pageSize);
+  }, [rows, safePage]);
   const summary = `${rows.length} results`;
 
   return (
@@ -391,8 +463,9 @@ function SemgrepFindings({
         <JsonBlock value={raw} />
       ) : (
         <div className="space-y-2">
-          {rows.map((entry, index) => {
+          {pagedRows.map((entry, index) => {
             const item = (entry ?? {}) as Record<string, unknown>;
+            const absoluteIndex = (safePage - 1) * pageSize + index;
             const severity = String(
               (item.extra as Record<string, unknown>)?.severity ??
               (item.severity as string) ??
@@ -412,7 +485,7 @@ function SemgrepFindings({
 
             return (
               <div
-                key={`${item.check_id || "semgrep"}-${index}`}
+                key={`${item.check_id || "semgrep"}-${absoluteIndex}`}
                 className="border border-zinc-800 p-3"
               >
                 <div className="flex flex-wrap items-center gap-2">
@@ -431,6 +504,14 @@ function SemgrepFindings({
               </div>
             );
           })}
+
+          <PaginationControls
+            page={safePage}
+            totalPages={totalPages}
+            totalItems={rows.length}
+            pageSize={pageSize}
+            onPageChange={setPage}
+          />
         </div>
       )}
     </ScannerSection>
@@ -446,6 +527,184 @@ function TrivyFindings({
   raw: unknown;
 }) {
   const rows = flattenTrivy(items);
+  const pageSize = 50;
+  const [page, setPage] = useState(1);
+  const totalPages = Math.max(1, Math.ceil(rows.length / pageSize));
+  const safePage = Math.min(page, totalPages);
+  const pagedRows = useMemo(() => {
+    const start = (safePage - 1) * pageSize;
+    return rows.slice(start, start + pageSize);
+  }, [rows, safePage]);
+
+  if (rows.length === 0) {
+    const data = (raw && typeof raw === "object" ? raw : {}) as Record<string, unknown>;
+    const metadata =
+      data.Metadata && typeof data.Metadata === "object"
+        ? (data.Metadata as Record<string, unknown>)
+        : {};
+
+    const imageConfig =
+      metadata.ImageConfig && typeof metadata.ImageConfig === "object"
+        ? (metadata.ImageConfig as Record<string, unknown>)
+        : {};
+
+    const config =
+      imageConfig.config && typeof imageConfig.config === "object"
+        ? (imageConfig.config as Record<string, unknown>)
+      : {};
+
+    const repoTags = Array.isArray(metadata.RepoTags) ? metadata.RepoTags : [];
+    const repoDigests = Array.isArray(metadata.RepoDigests) ? metadata.RepoDigests : [];
+    const layers = Array.isArray(metadata.Layers) ? metadata.Layers : [];
+    const env = Array.isArray(config.Env) ? config.Env : [];
+    const cmd = Array.isArray(config.Cmd) ? config.Cmd : [];
+
+    return (
+      <ScannerSection
+        title={title}
+        summary={`✓ Clean · ${repoTags.length} tags · ${layers.length} layers`}
+        defaultOpen
+      >
+        <div className="space-y-3">
+          <FindingCard>
+            <div className="grid gap-x-4 gap-y-3 sm:grid-cols-2">
+              <LabelValue 
+                label="Image ID" 
+                value={String(metadata.ImageID ?? "unknown")} 
+              />
+              <LabelValue 
+                label="Size" 
+                value={`${Number(metadata.Size ?? 0).toLocaleString()} bytes`} 
+              />
+              <LabelValue 
+                label="Architecture" 
+                value={String(imageConfig.architecture ?? "unknown")} 
+              />
+              <LabelValue 
+                label="OS" 
+                value={String(imageConfig.os ?? "unknown")} 
+              />
+            </div>
+          </FindingCard>
+
+          {repoTags.length > 0 && (
+            <FindingCard>
+              <div className="mb-3 text-[11px] uppercase tracking-wide text-zinc-500">
+                Tags
+              </div>
+              <div className="space-y-2">
+                {repoTags.map((tag) => (
+                  <div key={String(tag)} className="break-all text-sm text-white">
+                    {String(tag)}
+                  </div>
+                ))}
+              </div>
+            </FindingCard>
+          )}
+
+          {repoDigests.length > 0 && (
+            <FindingCard>
+              <div className="mb-3 text-[11px] uppercase tracking-wide text-zinc-500">
+                Digests
+              </div>
+              <div className="space-y-2">
+                {repoDigests.map((digest) => (
+                  <div key={String(digest)} className="break-all text-xs text-zinc-400">
+                    {String(digest)}
+                  </div>
+                ))}
+              </div>
+            </FindingCard>
+          )}
+
+          {cmd.length > 0 && (
+            <FindingCard>
+              <div className="mb-3 text-[11px] uppercase tracking-wide text-zinc-500">
+                Command
+              </div>
+              <div className="text-sm text-white break-all">
+                {cmd.join(" ")}
+              </div>
+            </FindingCard>
+          )}
+
+          {env.length > 0 && (
+            <FindingCard>
+              <div className="mb-3 flex items-center justify-between gap-3">
+                <div className="text-[11px] uppercase tracking-wide text-zinc-500">
+                  Environment
+                </div>
+                <span className="text-xs text-zinc-500">{env.length} vars</span>
+              </div>
+              <div className="space-y-2">
+                {env.slice(0, 10).map((entry, index) => {
+                  const text = String(entry);
+                  const [key, ...rest] = text.split("=");
+                  return (
+                    <div
+                      key={`${key}-${index}`}
+                      className="grid gap-2 border border-zinc-800 p-2 text-xs sm:grid-cols-[140px_1fr]"
+                    >
+                      <div className="font-medium text-zinc-400">{key}</div>
+                      <div className="break-all text-zinc-300">
+                        {rest.join("=") || "—"}
+                      </div>
+                    </div>
+                  );
+                })}
+                {env.length > 10 && (
+                  <div className="text-xs text-zinc-500">
+                    +{env.length - 10} more variables
+                  </div>
+                )}
+              </div>
+            </FindingCard>
+          )}
+
+          {layers.length > 0 && (
+            <FindingCard>
+              <div className="mb-3 flex items-center justify-between gap-3">
+                <div className="text-[11px] uppercase tracking-wide text-zinc-500">
+                  Layers
+                </div>
+                <span className="text-xs text-zinc-500">{layers.length} layers</span>
+              </div>
+              <div className="space-y-2">
+                {layers.slice(0, 10).map((layer: unknown, index: number) => {
+                  const layerObj = layer as Record<string, unknown>;
+                  return (
+                    <div
+                      key={`${String(layerObj.Digest ?? "layer")}-${index}`}
+                      className="border border-zinc-800 p-2 text-xs"
+                    >
+                      {typeof layerObj.Size !== "undefined" && (
+                        <div className="text-zinc-400">
+                          {Number(layerObj.Size).toLocaleString()} bytes
+                        </div>
+                      )}
+                      <div className="mt-1 break-all text-zinc-500 text-[10px]">
+                        {String(layerObj.Digest ?? "unknown")}
+                      </div>
+                    </div>
+                  );
+                })}
+                {layers.length > 10 && (
+                  <div className="text-xs text-zinc-500">
+                    +{layers.length - 10} more layers
+                  </div>
+                )}
+              </div>
+            </FindingCard>
+          )}
+
+          <CodeTextBlock
+            value={JSON.stringify(data, null, 2)}
+            label="Raw Trivy scan"
+          />
+        </div>
+      </ScannerSection>
+    );
+  }
 
   const counts = rows.reduce(
     (acc, row) => {
@@ -471,129 +730,29 @@ function TrivyFindings({
 
   return (
     <ScannerSection title={title} summary={summary}>
-      {rows.length === 0 ? (
-        <JsonBlock value={raw} />
-      ) : (
-        <div className="space-y-2">
-          {rows.map((entry, index) => {
-            const item = entry as Record<string, unknown>;
-            const category = item.category ?? "finding";
-            const severity = item.Severity ?? item.severity ?? "unknown";
+      <div className="space-y-2">
+        {pagedRows.map((entry, index) => {
+          const item = entry as Record<string, unknown>;
+          const absoluteIndex = (safePage - 1) * pageSize + index;
+          const category = item.category ?? "finding";
+          const severity = item.Severity ?? item.severity ?? "unknown";
 
-            if (category === "secret") {
-              const id = item.RuleID ?? item.ruleId ?? "secret-rule";
-              const titleText =
-                item.Title ??
-                item.title ??
-                item.Category ??
-                item.category ??
-                "Trivy secret";
-              const target = item.target ?? "unknown";
-              const startLine = item.StartLine ?? item.startLine;
-              const endLine = item.EndLine ?? item.endLine;
-              const match = item.Match ?? item.match;
-
-              return (
-                <div
-                  key={`${id}-${index}`}
-                  className="border border-zinc-800 p-3"
-                >
-                  <div className="flex flex-wrap items-center gap-2">
-                    <span className="border border-zinc-700 px-2 py-1 text-[11px] uppercase tracking-wide text-zinc-300">
-                      {String(severity)}
-                    </span>
-                    <span className="border border-zinc-700 px-2 py-1 text-[11px] uppercase tracking-wide text-zinc-300">
-                      secret
-                    </span>
-                    <span className="text-xs text-zinc-500 break-all">
-                      {String(id)}
-                    </span>
-                  </div>
-
-                  <p className="mt-2 text-sm text-white">{String(titleText)}</p>
-
-                  <div className="mt-2 flex flex-wrap gap-x-4 gap-y-1 text-xs text-zinc-500">
-                    <span className="break-all">{String(target)}</span>
-                    {String(item.Category) && (
-                      <span>{String(item.Category)}</span>
-                    )}
-                    {String(startLine) && (
-                      <span>
-                        line {String(startLine)}
-                        {String(endLine) && endLine !== startLine
-                          ? `-${String(endLine)}`
-                          : ""}
-                      </span>
-                    )}
-                  </div>
-
-                  {match ? <CodeTextBlock value={match} /> : null}
-                </div>
-              );
-            }
-
-            if (category === "misconfiguration") {
-              const id = item.ID ?? item.AVDID ?? item.id ?? "rule";
-              const titleText =
-                item.Title ?? item.title ?? item.Message ?? item.message ?? id;
-              const target = item.target ?? item.Target ?? "unknown";
-
-              return (
-                <div
-                  key={`${id}-${index}`}
-                  className="border border-zinc-800 p-3"
-                >
-                  <div className="flex flex-wrap items-center gap-2">
-                    <span className="border border-zinc-700 px-2 py-1 text-[11px] uppercase tracking-wide text-zinc-300">
-                      {String(severity)}
-                    </span>
-                    <span className="border border-zinc-700 px-2 py-1 text-[11px] uppercase tracking-wide text-zinc-300">
-                      misconfiguration
-                    </span>
-                    <span className="text-xs text-zinc-500 break-all">
-                      {String(id)}
-                    </span>
-                  </div>
-
-                  <p className="mt-2 text-sm text-white">{String(titleText)}</p>
-
-                  <div className="mt-2 flex flex-wrap gap-x-4 gap-y-1 text-xs text-zinc-500">
-                    <span className="break-all">{String(target)}</span>
-                    {String(item.Resolution) && (
-                      <span>{String(item.Resolution)}</span>
-                    )}
-                  </div>
-                </div>
-              );
-            }
-
-            const id =
-              item.VulnerabilityID ??
-              item.ID ??
-              item.AVDID ??
-              item.id ??
-              "vuln";
-
+          if (category === "secret") {
+            const id = item.RuleID ?? item.ruleId ?? "secret-rule";
             const titleText =
               item.Title ??
               item.title ??
-              item.Description ??
-              item.description ??
-              item.Message ??
-              item.message ??
-              id;
-
-            const target =
-              item.PkgName ?? item.Target ?? item.target ?? "unknown";
-
-            const installedVersion =
-              item.InstalledVersion ?? item.installedVersion;
-
-            const fixedVersion = item.FixedVersion ?? item.fixedVersion;
+              item.Category ??
+              item.category ??
+              "Trivy secret";
+            const target = item.target ?? "unknown";
+            const startLine = item.StartLine ?? item.startLine;
+            const endLine = item.EndLine ?? item.endLine;
+            const match = item.Match ?? item.match;
 
             return (
               <div
-                key={`${id}-${index}`}
+                key={`${id}-${absoluteIndex}`}
                 className="border border-zinc-800 p-3"
               >
                 <div className="flex flex-wrap items-center gap-2">
@@ -601,7 +760,7 @@ function TrivyFindings({
                     {String(severity)}
                   </span>
                   <span className="border border-zinc-700 px-2 py-1 text-[11px] uppercase tracking-wide text-zinc-300">
-                    vulnerability
+                    secret
                   </span>
                   <span className="text-xs text-zinc-500 break-all">
                     {String(id)}
@@ -612,18 +771,123 @@ function TrivyFindings({
 
                 <div className="mt-2 flex flex-wrap gap-x-4 gap-y-1 text-xs text-zinc-500">
                   <span className="break-all">{String(target)}</span>
-                  {String(installedVersion) && (
-                    <span>installed: {String(installedVersion)}</span>
+                  {String(item.Category) && (
+                    <span>{String(item.Category)}</span>
                   )}
-                  {String(fixedVersion) && (
-                    <span>fixed: {String(fixedVersion)}</span>
+                  {String(startLine) && (
+                    <span>
+                      line {String(startLine)}
+                      {String(endLine) && endLine !== startLine
+                        ? `-${String(endLine)}`
+                        : ""}
+                    </span>
+                  )}
+                </div>
+
+                {match ? <CodeTextBlock value={match} /> : null}
+              </div>
+            );
+          }
+
+          if (category === "misconfiguration") {
+            const id = item.ID ?? item.AVDID ?? item.id ?? "rule";
+            const titleText =
+              item.Title ?? item.title ?? item.Message ?? item.message ?? id;
+            const target = item.target ?? item.Target ?? "unknown";
+
+            return (
+              <div
+                key={`${id}-${absoluteIndex}`}
+                className="border border-zinc-800 p-3"
+              >
+                <div className="flex flex-wrap items-center gap-2">
+                  <span className="border border-zinc-700 px-2 py-1 text-[11px] uppercase tracking-wide text-zinc-300">
+                    {String(severity)}
+                  </span>
+                  <span className="border border-zinc-700 px-2 py-1 text-[11px] uppercase tracking-wide text-zinc-300">
+                    misconfiguration
+                  </span>
+                  <span className="text-xs text-zinc-500 break-all">
+                    {String(id)}
+                  </span>
+                </div>
+
+                <p className="mt-2 text-sm text-white">{String(titleText)}</p>
+
+                <div className="mt-2 flex flex-wrap gap-x-4 gap-y-1 text-xs text-zinc-500">
+                  <span className="break-all">{String(target)}</span>
+                  {String(item.Resolution) && (
+                    <span>{String(item.Resolution)}</span>
                   )}
                 </div>
               </div>
             );
-          })}
-        </div>
-      )}
+          }
+
+          const id =
+            item.VulnerabilityID ??
+            item.ID ??
+            item.AVDID ??
+            item.id ??
+            "vuln";
+
+          const titleText =
+            item.Title ??
+            item.title ??
+            item.Description ??
+            item.description ??
+            item.Message ??
+            item.message ??
+            id;
+
+          const target =
+            item.PkgName ?? item.Target ?? item.target ?? "unknown";
+
+          const installedVersion =
+            item.InstalledVersion ?? item.installedVersion;
+
+          const fixedVersion = item.FixedVersion ?? item.fixedVersion;
+
+          return (
+            <div
+              key={`${id}-${absoluteIndex}`}
+              className="border border-zinc-800 p-3"
+            >
+              <div className="flex flex-wrap items-center gap-2">
+                <span className="border border-zinc-700 px-2 py-1 text-[11px] uppercase tracking-wide text-zinc-300">
+                  {String(severity)}
+                </span>
+                <span className="border border-zinc-700 px-2 py-1 text-[11px] uppercase tracking-wide text-zinc-300">
+                  vulnerability
+                </span>
+                <span className="text-xs text-zinc-500 break-all">
+                  {String(id)}
+                </span>
+              </div>
+
+              <p className="mt-2 text-sm text-white">{String(titleText)}</p>
+
+              <div className="mt-2 flex flex-wrap gap-x-4 gap-y-1 text-xs text-zinc-500">
+                <span className="break-all">{String(target)}</span>
+                {String(installedVersion) && (
+                  <span>installed: {String(installedVersion)}</span>
+                )}
+                {String(fixedVersion) && (
+                  <span>fixed: {String(fixedVersion)}</span>
+                )}
+              </div>
+            </div>
+          );
+        })}
+
+        <PaginationControls
+          page={safePage}
+          totalPages={totalPages}
+          totalItems={rows.length}
+          pageSize={pageSize}
+          onPageChange={setPage}
+        />
+      </div>
     </ScannerSection>
   );
 }
@@ -679,6 +943,14 @@ function GitleaksFindings({
   raw: unknown;
 }) {
   const rows = Array.isArray(items) ? items : [];
+  const pageSize = 50;
+  const [page, setPage] = useState(1);
+  const totalPages = Math.max(1, Math.ceil(rows.length / pageSize));
+  const safePage = Math.min(page, totalPages);
+  const pagedRows = useMemo(() => {
+    const start = (safePage - 1) * pageSize;
+    return rows.slice(start, start + pageSize);
+  }, [rows, safePage]);
   const summary = `${rows.length} leaks`;
 
   return (
@@ -687,8 +959,9 @@ function GitleaksFindings({
         <JsonBlock value={raw} />
       ) : (
         <div className="space-y-2">
-          {rows.map((entry, index) => {
+          {pagedRows.map((entry, index) => {
             const item = (entry ?? {}) as Record<string, unknown>;
+            const absoluteIndex = (safePage - 1) * pageSize + index;
             const id = item.RuleID ?? "gitleaks-rule";
             const description =
               item.Description ?? item.RuleID ?? "Gitleaks finding";
@@ -701,7 +974,7 @@ function GitleaksFindings({
 
             return (
               <div
-                key={`${String(fingerprint ?? id)}-${index}`}
+                key={`${String(fingerprint ?? id)}-${absoluteIndex}`}
                 className="border border-zinc-800 p-3"
               >
                 <div className="flex flex-wrap items-center gap-2">
@@ -750,6 +1023,14 @@ function GitleaksFindings({
               </div>
             );
           })}
+
+          <PaginationControls
+            page={safePage}
+            totalPages={totalPages}
+            totalItems={rows.length}
+            pageSize={pageSize}
+            onPageChange={setPage}
+          />
         </div>
       )}
     </ScannerSection>
