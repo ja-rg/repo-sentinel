@@ -6,6 +6,7 @@ export const RUN_KINDS = [
   "dockerfile",
   "image",
   "k8s_manifest",
+  "k8s_service",
 ] as const;
 export type RunKind = typeof RUN_KINDS[number];
 
@@ -51,6 +52,175 @@ const ensureSchema = db.transaction(() => {
     CREATE INDEX IF NOT EXISTS idx_analysis_runs_status_created_at
     ON analysis_runs(status, created_at)
   `);
+
+  const analysisRunsTable = db.query(`
+    SELECT sql
+    FROM sqlite_master
+    WHERE type = 'table' AND name = 'analysis_runs'
+  `).get() as { sql?: string } | undefined;
+
+  const requiresAnalysisRunsMigration = !analysisRunsTable?.sql?.includes("'k8s_service'");
+
+  if (requiresAnalysisRunsMigration) {
+    db.run(`ALTER TABLE analysis_runs RENAME TO analysis_runs_old`);
+
+    db.run(`
+      CREATE TABLE analysis_runs (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        kind TEXT NOT NULL CHECK (kind IN (${RUN_KINDS.map(k => `'${k}'`).join(",")})),
+        input_ref TEXT NOT NULL,
+        status TEXT NOT NULL CHECK (status IN (${RUN_STATUS.map(k => `'${k}'`).join(",")})) DEFAULT 'pending',
+        stage TEXT,
+        findings_json TEXT,
+        decision_json TEXT,
+        error_text TEXT,
+        created_at TEXT NOT NULL DEFAULT (datetime('now')),
+        started_at TEXT,
+        finished_at TEXT
+      )
+    `);
+
+    db.run(`
+      INSERT INTO analysis_runs (
+        id,
+        kind,
+        input_ref,
+        status,
+        stage,
+        findings_json,
+        decision_json,
+        error_text,
+        created_at,
+        started_at,
+        finished_at
+      )
+      SELECT
+        id,
+        kind,
+        input_ref,
+        status,
+        stage,
+        findings_json,
+        decision_json,
+        error_text,
+        created_at,
+        started_at,
+        finished_at
+      FROM analysis_runs_old
+    `);
+
+    const hasWorkerHeartbeats = db.query(`
+      SELECT 1
+      FROM sqlite_master
+      WHERE type = 'table' AND name = 'worker_heartbeats'
+    `).get();
+
+    if (hasWorkerHeartbeats) {
+      db.run(`ALTER TABLE worker_heartbeats RENAME TO worker_heartbeats_old`);
+
+      db.run(`
+        CREATE TABLE worker_heartbeats (
+          worker_id TEXT PRIMARY KEY,
+          pid INTEGER,
+          status TEXT NOT NULL CHECK (status IN (${WORKER_STATUS.map(s => `'${s}'`).join(",")})),
+          current_run_id INTEGER,
+          hostname TEXT,
+          started_at TEXT NOT NULL DEFAULT (datetime('now')),
+          last_seen_at TEXT NOT NULL DEFAULT (datetime('now')),
+          details_json TEXT,
+          FOREIGN KEY (current_run_id) REFERENCES analysis_runs(id)
+        )
+      `);
+
+      db.run(`
+        INSERT INTO worker_heartbeats (
+          worker_id,
+          pid,
+          status,
+          current_run_id,
+          hostname,
+          started_at,
+          last_seen_at,
+          details_json
+        )
+        SELECT
+          worker_id,
+          pid,
+          status,
+          current_run_id,
+          hostname,
+          started_at,
+          last_seen_at,
+          details_json
+        FROM worker_heartbeats_old
+      `);
+
+      db.run(`DROP TABLE worker_heartbeats_old`);
+
+      db.run(`
+        CREATE INDEX IF NOT EXISTS idx_worker_heartbeats_last_seen
+        ON worker_heartbeats(last_seen_at)
+      `);
+    }
+
+    const hasAnalysisRunLogs = db.query(`
+      SELECT 1
+      FROM sqlite_master
+      WHERE type = 'table' AND name = 'analysis_run_logs'
+    `).get();
+
+    if (hasAnalysisRunLogs) {
+      db.run(`ALTER TABLE analysis_run_logs RENAME TO analysis_run_logs_old`);
+
+      db.run(`
+        CREATE TABLE analysis_run_logs (
+          id INTEGER PRIMARY KEY AUTOINCREMENT,
+          run_id INTEGER NOT NULL,
+          level TEXT NOT NULL CHECK (level IN ('debug','info','warn','error')),
+          stage TEXT,
+          message TEXT NOT NULL,
+          details_json TEXT,
+          created_at TEXT NOT NULL DEFAULT (datetime('now')),
+          FOREIGN KEY (run_id) REFERENCES analysis_runs(id)
+        )
+      `);
+
+      db.run(`
+        INSERT INTO analysis_run_logs (
+          id,
+          run_id,
+          level,
+          stage,
+          message,
+          details_json,
+          created_at
+        )
+        SELECT
+          id,
+          run_id,
+          level,
+          stage,
+          message,
+          details_json,
+          created_at
+        FROM analysis_run_logs_old
+      `);
+
+      db.run(`DROP TABLE analysis_run_logs_old`);
+
+      db.run(`
+        CREATE INDEX IF NOT EXISTS idx_analysis_run_logs_run_id_created_at
+        ON analysis_run_logs(run_id, created_at)
+      `);
+    }
+
+    db.run(`DROP TABLE analysis_runs_old`);
+
+    db.run(`
+      CREATE INDEX IF NOT EXISTS idx_analysis_runs_status_created_at
+      ON analysis_runs(status, created_at)
+    `);
+  }
 
   db.run(`
     CREATE TABLE IF NOT EXISTS worker_heartbeats (

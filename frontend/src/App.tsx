@@ -46,6 +46,11 @@ const kindMeta: Record<
     accept: ".yaml,.yml,.json",
     label: "K8s Manifest",
   },
+  k8s_service: {
+    mode: "text",
+    placeholder: "http://service.namespace.svc.cluster.local:80",
+    label: "K8s Service URL",
+  },
   archive: {
     mode: "file",
     accept: ".zip,.tar,.tar.gz",
@@ -544,7 +549,8 @@ function App() {
                   </details>
                 </Subsection>
 
-                {selectedRun.kind === "k8s_manifest" && (
+                {(selectedRun.kind === "k8s_manifest" ||
+                  selectedRun.kind === "k8s_service") && (
                   <Subsection title="Decision">
                     <DecisionView decision={decision} />
                   </Subsection>

@@ -13,6 +13,9 @@ function isAcceptedUpload(kind: RunKind, file: File): boolean {
         case "k8s_manifest":
             return name.endsWith(".yaml") || name.endsWith(".yml") || name.endsWith(".json");
 
+        case "k8s_service":
+            return false;
+
         default:
             return false;
     }

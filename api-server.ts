@@ -80,11 +80,11 @@ app.post("/analysis-runs", async (c) => {
     if (!isValidKind(kind)) {
       return c.json({
         error:
-          "Invalid kind. Use one of: repo, archive, dockerfile, image, k8s_manifest",
+          "Invalid kind. Use one of: repo, archive, dockerfile, image, k8s_manifest, k8s_service",
       }, 400);
     }
 
-    const isJsonKind = kind === "repo" || kind === "image";
+    const isJsonKind = kind === "repo" || kind === "image" || kind === "k8s_service";
     const isUploadKind = kind === "archive" || kind === "dockerfile" ||
       kind === "k8s_manifest";
 

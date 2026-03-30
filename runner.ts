@@ -3,6 +3,7 @@ import { processDockerfile } from "./src/runner/process-dockerfile";
 import { processImage } from "./src/runner/process-image";
 import { processManifest } from "./src/runner/process-manifest";
 import { processRepoOrArchive } from "./src/runner/process-repo-or-archive";
+import { processService } from "./src/runner/process-service";
 import {
   claimNextPendingRun,
   markRunDone,
@@ -117,6 +118,9 @@ while (true) {
         break;
       case "k8s_manifest":
         [findings, decision] = await processManifest(run);
+        break;
+      case "k8s_service":
+        [findings, decision] = await processService(run);
         break;
       default:
         throw new Error(`Unknown run kind: ${run.kind}`);

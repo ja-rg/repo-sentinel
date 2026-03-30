@@ -5,7 +5,8 @@ export type RunKind =
   | "archive"
   | "dockerfile"
   | "image"
-  | "k8s_manifest";
+  | "k8s_manifest"
+  | "k8s_service";
 export type RunStatus = "pending" | "running" | "done" | "failed" | "rejected";
 export type CheckState = "pass" | "warn" | "fail" | "unknown";
 export type AnalysisRun = {
