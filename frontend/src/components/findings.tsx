@@ -14,6 +14,20 @@ function summarizeCodeText(value: unknown, maxLength = 20) {
   return `${text.slice(0, maxLength)}…`;
 }
 
+function stripAnsi(text: string) {
+  return text.replace(/\x1B\[[0-9;]*m/g, "");
+}
+
+function severityRank(value: unknown) {
+  const severity = String(value ?? "").toLowerCase();
+  if (severity === "critical") return 5;
+  if (severity === "high") return 4;
+  if (severity === "medium") return 3;
+  if (severity === "low") return 2;
+  if (severity === "info") return 1;
+  return 0;
+}
+
 function CodeTextBlock({
   value,
   label = "Matched content",
@@ -165,6 +179,89 @@ function looksLikeDockerInspect(raw: unknown) {
     typeof data.Os === "string" &&
     typeof data.Architecture === "string" &&
     !!data.Config
+  );
+}
+
+export function DecisionView({ decision }: { decision: unknown }) {
+  if (!decision || typeof decision !== "object") {
+    return <JsonBlock value={decision} />;
+  }
+
+  const d = decision as Record<string, unknown>;
+  const action = String(d.action ?? "unknown");
+  const reason = String(d.reason ?? "");
+  const stage = String(d.stage ?? "unknown");
+  const applied = d.applied === true;
+  const exposedUrl = d.exposed_url ? String(d.exposed_url) : null;
+
+  const actionColor =
+    action === "allow"
+      ? "bg-green-950/30 border-green-700 text-green-200"
+      : action === "reject"
+        ? "bg-red-950/30 border-red-700 text-red-200"
+        : action === "teardown"
+          ? "bg-yellow-950/30 border-yellow-700 text-yellow-200"
+          : "bg-zinc-900/30 border-zinc-700 text-zinc-200";
+
+  const actionBg =
+    action === "allow"
+      ? "bg-green-950/40"
+      : action === "reject"
+        ? "bg-red-950/40"
+        : action === "teardown"
+          ? "bg-yellow-950/40"
+          : "bg-zinc-900/40";
+
+  return (
+    <div className={`border-l-4 ${actionColor} border p-4 space-y-3`}>
+      <div>
+        <div className="text-[11px] uppercase tracking-wide text-zinc-500 mb-1">
+          Decision
+        </div>
+        <div className="flex flex-wrap items-center gap-2">
+          <span className={`border ${actionColor} px-3 py-1 text-sm font-semibold uppercase`}>
+            {action}
+          </span>
+          <span className="text-xs text-zinc-400">{stage}</span>
+        </div>
+      </div>
+
+      {reason && (
+        <div className={`${actionBg} px-3 py-2 rounded border border-zinc-700`}>
+          <p className="text-sm text-white break-words">{reason}</p>
+        </div>
+      )}
+
+      {applied && (
+        <div className="flex items-center gap-2 text-xs text-green-300">
+          <span>✓</span>
+          <span>Manifest was applied to cluster</span>
+        </div>
+      )}
+
+      {!applied && (
+        <div className="flex items-center gap-2 text-xs text-red-300">
+          <span>✗</span>
+          <span>Manifest was not applied</span>
+        </div>
+      )}
+
+      {exposedUrl && (
+        <div>
+          <div className="text-[11px] uppercase tracking-wide text-zinc-500 mb-1">
+            Service URL
+          </div>
+          <a
+            href={exposedUrl}
+            target="_blank"
+            rel="noopener noreferrer"
+            className="text-blue-400 hover:text-blue-300 underline break-all text-sm"
+          >
+            {exposedUrl}
+          </a>
+        </div>
+      )}
+    </div>
   );
 }
 
@@ -536,15 +633,32 @@ function TrivyFindings({
   items: unknown[];
   raw: unknown;
 }) {
-  const rows = flattenTrivy(items);
+  // Check if items are already normalized (manifest findings from backend)
+  // vs raw Trivy output that needs flattening
+  const isNormalized = items.some(
+    (item) =>
+      item &&
+      typeof item === "object" &&
+      ((item as Record<string, unknown>).tool === "trivy" ||
+        (item as Record<string, unknown>).category === "manifest")
+  );
+
+  const rows = isNormalized ? (items as Record<string, unknown>[]) : flattenTrivy(items);
+  const sortedRows = useMemo(() => {
+    return [...rows].sort((a, b) => {
+      const aSeverity = (a as Record<string, unknown>).severity ?? (a as Record<string, unknown>).Severity;
+      const bSeverity = (b as Record<string, unknown>).severity ?? (b as Record<string, unknown>).Severity;
+      return severityRank(bSeverity) - severityRank(aSeverity);
+    });
+  }, [rows]);
   const pageSize = 50;
   const [page, setPage] = useState(1);
-  const totalPages = Math.max(1, Math.ceil(rows.length / pageSize));
+  const totalPages = Math.max(1, Math.ceil(sortedRows.length / pageSize));
   const safePage = Math.min(page, totalPages);
   const pagedRows = useMemo(() => {
     const start = (safePage - 1) * pageSize;
-    return rows.slice(start, start + pageSize);
-  }, [rows, safePage]);
+    return sortedRows.slice(start, start + pageSize);
+  }, [sortedRows, safePage]);
 
   if (rows.length === 0) {
     const data = (raw && typeof raw === "object" ? raw : {}) as Record<string, unknown>;
@@ -799,11 +913,29 @@ function TrivyFindings({
             );
           }
 
-          if (category === "misconfiguration") {
-            const id = item.ID ?? item.AVDID ?? item.id ?? "rule";
+          if (category === "misconfiguration" || category === "manifest") {
+            const rawData = (item.raw && typeof item.raw === "object" 
+              ? item.raw as Record<string, unknown>
+              : {}) as Record<string, unknown>;
+
+            const id = item.ID ?? rawData.ID ?? item.id ?? rawData.id ?? "rule";
             const titleText =
-              item.Title ?? item.title ?? item.Message ?? item.message ?? id;
-            const target = item.target ?? item.Target ?? "unknown";
+              item.title ?? item.Title ?? 
+              rawData.Title ?? rawData.title ?? 
+              item.Message ?? rawData.Message ?? 
+              id;
+            const target = item.resource ?? item.target ?? item.Target ?? "unknown";
+            const description = item.description ?? rawData.Description ?? item.Description ?? "";
+            const resolution = rawData.Resolution ?? item.Resolution ?? item.resolution ?? "";
+            const primaryUrl = rawData.PrimaryURL ?? item.PrimaryURL ?? "";
+            const references = Array.isArray(rawData.References) ? rawData.References : [];
+            const causeMetadata = rawData.CauseMetadata ?? item.CauseMetadata;
+            const codeLines = causeMetadata && typeof causeMetadata === "object" 
+              ? (causeMetadata as Record<string, unknown>).Code 
+              : null;
+            const code = codeLines && typeof codeLines === "object"
+              ? (codeLines as Record<string, unknown>).Lines
+              : null;
 
             return (
               <div
@@ -824,12 +956,102 @@ function TrivyFindings({
 
                 <p className="mt-2 text-sm text-white">{String(titleText)}</p>
 
+                {description && (
+                  <p className="mt-2 text-xs text-zinc-300">
+                    {String(description)}
+                  </p>
+                )}
+
                 <div className="mt-2 flex flex-wrap gap-x-4 gap-y-1 text-xs text-zinc-500">
                   <span className="break-all">{String(target)}</span>
-                  {String(item.Resolution) && (
-                    <span>{String(item.Resolution)}</span>
-                  )}
                 </div>
+
+                {(resolution || (Array.isArray(code) && code.length > 0)) && (
+                  <details className="mt-3 border border-zinc-800 bg-black/40">
+                    <summary className="cursor-pointer px-3 py-2 text-xs uppercase tracking-wide text-zinc-400 hover:bg-zinc-900">
+                      Remediation and Problem Location
+                    </summary>
+
+                    <div className="space-y-3 border-t border-zinc-800 p-3">
+                      {resolution && (
+                        <div className="border-l-2 border-yellow-700 bg-yellow-950/30 px-3 py-2 text-xs text-yellow-200">
+                          <div className="mb-1 text-[11px] font-medium uppercase tracking-wide text-yellow-300">
+                            Resolution
+                          </div>
+                          <div>{String(resolution)}</div>
+                        </div>
+                      )}
+
+                      {Array.isArray(code) && code.length > 0 && (
+                        <div className="border border-zinc-800 bg-black p-3">
+                          <div className="mb-2 text-[11px] uppercase tracking-wide text-zinc-500">
+                            Problem Location
+                          </div>
+                          <div className="space-y-1 font-mono text-xs leading-5">
+                            {code.map((line: unknown, codeIndex: number) => {
+                              const lineObj = line as Record<string, unknown>;
+                              const lineNum = String(lineObj.Number ?? codeIndex + 1);
+                              const content = stripAnsi(String(lineObj.Content ?? ""));
+                              const highlighted = stripAnsi(String(lineObj.Highlighted ?? content));
+                              const renderLine = highlighted || content;
+                              const isCause = lineObj.IsCause ?? false;
+
+                              return (
+                                <div
+                                  key={`line-${lineNum}`}
+                                  className={`whitespace-pre-wrap break-words ${isCause ? "bg-red-950/40 text-red-200" : "text-zinc-400"}`}
+                                >
+                                  <span className="mr-2 inline-block min-w-[40px] text-right text-zinc-600">
+                                    {lineNum}
+                                  </span>
+                                  {renderLine}
+                                </div>
+                              );
+                            })}
+                          </div>
+                        </div>
+                      )}
+                    </div>
+                  </details>
+                )}
+
+                {(primaryUrl || (Array.isArray(references) && references.length > 0)) && (
+                  <div className="mt-3 space-y-2">
+                    {primaryUrl && (
+                      <div className="text-xs">
+                        <a
+                          href={String(primaryUrl)}
+                          target="_blank"
+                          rel="noopener noreferrer"
+                          className="text-blue-400 hover:text-blue-300 underline break-all"
+                        >
+                          {String(primaryUrl)}
+                        </a>
+                      </div>
+                    )}
+                    {Array.isArray(references) && references.length > 0 && (
+                      <div>
+                        <div className="text-[11px] uppercase tracking-wide text-zinc-500 mb-1">
+                          References
+                        </div>
+                        <div className="space-y-1">
+                          {references.map((ref: unknown, refIndex: number) => (
+                            <div key={`ref-${refIndex}`} className="text-xs">
+                              <a
+                                href={String(ref)}
+                                target="_blank"
+                                rel="noopener noreferrer"
+                                className="text-blue-400 hover:text-blue-300 underline break-all"
+                              >
+                                {String(ref)}
+                              </a>
+                            </div>
+                          ))}
+                        </div>
+                      </div>
+                    )}
+                  </div>
+                )}
               </div>
             );
           }

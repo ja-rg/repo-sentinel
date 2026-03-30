@@ -99,6 +99,23 @@ export function normalizeFindings(raw: unknown): FindingsSection[] {
   }
 
   if (Array.isArray(parsed)) {
+    // Check if this is a trivy manifest findings array (items have 'tool' property)
+    const isTrivyManifest = parsed.some(
+      (item) => item && typeof item === "object" && (item as Record<string, unknown>).tool === "trivy"
+    );
+
+    if (isTrivyManifest) {
+      return [
+        {
+          key: "trivy",
+          title: "Trivy",
+          kind: "trivy",
+          items: parsed,
+          raw: parsed,
+        },
+      ];
+    }
+
     return [
       {
         key: "findings",

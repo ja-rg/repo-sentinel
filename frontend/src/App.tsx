@@ -13,7 +13,7 @@ interface RunLog {
 
 import { cn, parseJson } from "./utilities/json";
 import { formatDateTime, toneForRunStatus } from "./utilities/format";
-import { FindingsSectionView } from "./components/findings";
+import { FindingsSectionView, DecisionView } from "./components/findings";
 import { normalizeHealth, normalizeFindings } from "./utilities/normalization";
 import {
   HealthPanel,
@@ -528,7 +528,7 @@ function App() {
 
                 {selectedRun.kind === "k8s_manifest" && (
                   <Subsection title="Decision">
-                    <JsonBlock value={decision} />
+                    <DecisionView decision={decision} />
                   </Subsection>
                 )}
 

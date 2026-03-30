@@ -1,5 +1,5 @@
 import { readdir, rm } from "node:fs/promises";
-import { join, extname } from "node:path";
+import { join, extname, dirname, basename } from "node:path";
 import { spawn } from "bun";
 import { dockerRun } from "./docker";
 import { type Run, setRunStage } from "./update-runs";
@@ -249,12 +249,12 @@ async function validateManifestFile(manifestPath: string, runId: number) {
 async function runStaticManifestAnalysis(manifestPath: string, runId: number): Promise<Finding[]> {
     const findings: Finding[] = [];
 
-    const hostDir = manifestPath.substring(0, manifestPath.lastIndexOf("/")).replaceAll("\\", "/");
-    const filename = manifestPath.split(/[\\/]/).pop()!;
+    const hostDir = dirname(manifestPath).replaceAll("\\", "/");
+    const filename = basename(manifestPath);
 
     const volumes = [
         {
-            hostPath: hostDir.startsWith("./") ? hostDir : `./${hostDir}`,
+            hostPath: hostDir,
             containerPath: "/data",
         },
     ];
@@ -263,15 +263,18 @@ async function runStaticManifestAnalysis(manifestPath: string, runId: number): P
     try {
         const trivyProc = dockerRun(
             ["config", "--quiet", "--format", "json", `/data/${filename}`],
-            "aquasec/trivy:latest",
+            "aquasec/trivy:canary",
             volumes
         );
 
         const output = await trivyProc.stdout.text();
+        const errText = await trivyProc.stderr.text();
         const exitCode = await trivyProc.exited;
 
         if (exitCode !== 0) {
-            throw new Error(`Trivy config failed with exit code ${exitCode}`);
+            throw new Error(
+                `Trivy config failed with exit code ${exitCode}${errText.trim() ? `: ${errText.trim()}` : ""}`
+            );
         }
 
         const parsed = JSON.parse(output);
@@ -311,10 +314,13 @@ async function runStaticManifestAnalysis(manifestPath: string, runId: number): P
         );
 
         const output = await semgrepProc.stdout.text();
+        const errText = await semgrepProc.stderr.text();
         const exitCode = await semgrepProc.exited;
 
         if (exitCode !== 0) {
-            throw new Error(`Semgrep failed with exit code ${exitCode}`);
+            throw new Error(
+                `Semgrep failed with exit code ${exitCode}${errText.trim() ? `: ${errText.trim()}` : ""}`
+            );
         }
 
         const parsed = JSON.parse(output);
