@@ -184,7 +184,12 @@ function looksLikeDockerInspect(raw: unknown) {
 
 export function DecisionView({ decision }: { decision: unknown }) {
   if (!decision || typeof decision !== "object") {
-    return <JsonBlock value={decision} />;
+    return <div className="border-l-4 border-zinc-700 bg-zinc-900/30 p-4">
+      <div className="text-[11px] uppercase tracking-wide text-zinc-500 mb-1">
+        Omitted
+      </div>
+      <div className="text-xs text-zinc-400">No decision information available</div>
+    </div>;
   }
 
   const d = decision as Record<string, unknown>;
