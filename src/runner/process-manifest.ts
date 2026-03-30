@@ -1,6 +1,7 @@
 import { readdir, rm } from "node:fs/promises";
 import { join, extname, dirname, basename } from "node:path";
 import { spawn } from "bun";
+import { parseAllDocuments } from "yaml";
 import { dockerRun } from "./docker";
 import { type Run, setRunStage } from "./update-runs";
 import { DATA_DIR } from "../db";
@@ -26,6 +27,18 @@ type Decision = {
     exposed_url?: string | null;
 };
 
+type ManifestResource = {
+    kind: string;
+    name: string;
+    namespace: string;
+    spec?: Record<string, unknown>;
+};
+
+type ServiceResource = ManifestResource & {
+    kind: "Service";
+    spec: Record<string, unknown>;
+};
+
 export async function processManifest(
     run: Run
 ): Promise<[Finding[], Decision]> {
@@ -35,6 +48,7 @@ export async function processManifest(
     let applied = false;
     let exposedUrl: string | null = null;
     let manifestPath: string | null = null;
+    let runtimeTunnelCleanup: (() => void) | null = null;
 
     try {
         setRunStage(run.id, "validating-manifest", "Validating uploaded manifest");
@@ -46,6 +60,7 @@ export async function processManifest(
         }
 
         await validateManifestFile(manifestPath, run.id);
+        const resources = await parseManifestResources(manifestPath, run.id);
 
         // 2. Static analysis
         setRunStage(run.id, "static-analysis", "Running manifest static analysis");
@@ -75,35 +90,58 @@ export async function processManifest(
 
         // 3. Apply to cluster
         setRunStage(run.id, "applying", "Applying manifest to cluster");
+        await ensureManifestNamespaces(resources, run.id);
         await kubectlApply(manifestPath, run.id);
         applied = true;
 
         // 4. Wait for workload/service readiness
         setRunStage(run.id, "waiting-readiness", "Waiting for workload readiness");
-        await waitForManifestResources(manifestPath, run.id);
+        await waitForManifestResources(resources, run.id);
 
-        // 5. Resolve service URL
-        setRunStage(run.id, "resolving-service", "Resolving service URL");
-        exposedUrl = await resolveManifestServiceUrl(manifestPath, run.id);
-        if (!exposedUrl) {
+        // 5. Resolve service resources and runtime scanning target
+        const services = getServiceResources(resources);
+        if (services.length === 0) {
+            setRunStage(run.id, "completed", "Manifest applied (no service exposure required)");
+            return [
+                findings,
+                {
+                    action: "allow",
+                    reason: "Manifest passed static checks and does not expose a Service for runtime probing.",
+                    stage: "completed",
+                    applied: true,
+                    exposed_url: null,
+                },
+            ];
+        }
+
+        const primaryService = services[0];
+        if (!primaryService) {
+            throw new Error(`No primary Service found for run ${run.id}`);
+        }
+
+        setRunStage(run.id, "runtime-target", "Opening temporary runtime target for Nuclei");
+        const runtimeTarget = await openRuntimeScanTarget(primaryService, run.id);
+        runtimeTunnelCleanup = runtimeTarget.cleanup;
+
+        if (!runtimeTarget.url) {
             findings.push({
                 tool: "deployment",
                 category: "deployment",
                 severity: "medium",
-                title: "Service URL not resolved",
+                title: "Runtime target not resolved",
                 description:
-                    "Manifest was applied, but no reachable service URL could be resolved through Minikube.",
+                    "Manifest was applied, but no reachable runtime target could be prepared for Nuclei.",
             });
 
-                    setRunStage(run.id, "teardown", "Tearing down deployment after unresolved service URL");
+            setRunStage(run.id, "teardown", "Tearing down deployment after unresolved runtime target");
             await kubectlDelete(manifestPath, run.id).catch(() => { });
-                    setRunStage(run.id, "completed", "Manifest processing completed with teardown");
+            setRunStage(run.id, "completed", "Manifest processing completed with teardown");
             return [
                 findings,
                 {
                     action: "teardown",
-                    reason: "Deployment succeeded but service exposure could not be resolved safely.",
-                    stage: "service-resolution",
+                    reason: "Deployment succeeded but runtime probing target could not be resolved safely.",
+                    stage: "runtime-target",
                     applied: false,
                     exposed_url: null,
                 },
@@ -114,14 +152,16 @@ export async function processManifest(
         setRunStage(run.id, "runtime-scan", "Running runtime scan");
         logRun(run.id, "info", "Nuclei runtime scan started", {
             stage: "runtime-scan",
-            details: { target: exposedUrl },
+            details: { target: runtimeTarget.url },
         });
-        const runtimeFindings = await runNucleiScan(exposedUrl, run.id);
+        const runtimeFindings = await runNucleiScan(runtimeTarget.url, run.id);
         findings.push(...runtimeFindings);
         logRun(run.id, "info", "Nuclei runtime scan finished", {
             stage: "runtime-scan",
-            details: { resultCount: runtimeFindings.length, target: exposedUrl },
+            details: { resultCount: runtimeFindings.length, target: runtimeTarget.url },
         });
+        runtimeTarget.cleanup();
+        runtimeTunnelCleanup = null;
 
         if (hasBlockingRuntimeFindings(runtimeFindings)) {
             setRunStage(run.id, "teardown", "Tearing down deployment after runtime findings");
@@ -134,12 +174,14 @@ export async function processManifest(
                     reason: "Runtime scan found blocking issues after deployment.",
                     stage: "runtime-scan",
                     applied: false,
-                    exposed_url: exposedUrl,
+                    exposed_url: null,
                 },
             ];
         }
 
-        // 7. Safe enough to keep
+        // 7. Safe enough to keep; publish service URL after runtime checks pass
+        setRunStage(run.id, "publishing", "Resolving service URL for published access");
+        exposedUrl = await resolveManifestServiceUrl(primaryService, run.id);
         setRunStage(run.id, "completed", "Manifest processing completed");
         return [
             findings,
@@ -189,6 +231,14 @@ export async function processManifest(
             },
         ];
     } finally {
+        if (runtimeTunnelCleanup) {
+            try {
+                runtimeTunnelCleanup();
+            } catch {
+                // best effort cleanup
+            }
+        }
+
         try {
             await rm(runDir, { recursive: true, force: true });
         } catch (err) {
@@ -399,69 +449,372 @@ async function kubectlDelete(manifestPath: string, runId: number) {
     }
 }
 
-async function waitForManifestResources(manifestPath: string, runId: number) {
-    // Best-effort simple wait.
-    // You can later replace this with resource-aware rollout logic.
-    const proc = spawn({
-        cmd: ["kubectl", "wait", "--for=condition=available", "--timeout=120s", "-f", manifestPath],
-        stdout: "pipe",
-        stderr: "pipe",
-    });
+async function waitForManifestResources(resources: ManifestResource[], runId: number) {
+    const waits = resources.filter((resource) =>
+        ["Deployment", "StatefulSet", "DaemonSet", "Pod", "Job"].includes(resource.kind)
+    );
 
-    const stdout = await new Response(proc.stdout).text();
-    const stderr = await new Response(proc.stderr).text();
-    const exitCode = await proc.exited;
+    for (const resource of waits) {
+        let args: string[] | null = null;
 
-    // Some manifests do not define "available" resources, so do not always hard-fail here.
-    if (exitCode !== 0) {
-        console.warn(`kubectl wait warning for run ${runId}: ${stderr || stdout || "unknown wait issue"}`);
+        switch (resource.kind) {
+            case "Deployment":
+                args = ["rollout", "status", `deployment/${resource.name}`, "-n", resource.namespace, "--timeout=120s"];
+                break;
+            case "StatefulSet":
+                args = ["rollout", "status", `statefulset/${resource.name}`, "-n", resource.namespace, "--timeout=120s"];
+                break;
+            case "DaemonSet":
+                args = ["rollout", "status", `daemonset/${resource.name}`, "-n", resource.namespace, "--timeout=120s"];
+                break;
+            case "Pod":
+                args = ["wait", "--for=condition=Ready", `pod/${resource.name}`, "-n", resource.namespace, "--timeout=120s"];
+                break;
+            case "Job":
+                args = ["wait", "--for=condition=complete", `job/${resource.name}`, "-n", resource.namespace, "--timeout=120s"];
+                break;
+        }
+
+        if (!args) continue;
+
+        const result = await runCommand("kubectl", args, 130_000);
+        if (result.exitCode !== 0) {
+            throw new Error(
+                `Readiness check failed for ${resource.kind}/${resource.name} in namespace ${resource.namespace} on run ${runId}: ${result.stderr || result.stdout || "unknown error"}`,
+            );
+        }
     }
 }
 
-async function resolveManifestServiceUrl(manifestPath: string, runId: number): Promise<string | null> {
-    const serviceNames = await getServiceNamesFromManifest(manifestPath);
+async function resolveManifestServiceUrl(service: ServiceResource, runId: number): Promise<string | null> {
+    const serviceJsonResult = await runCommand(
+        "kubectl",
+        ["get", "service", service.name, "-n", service.namespace, "-o", "json"],
+        20_000,
+    );
+    if (serviceJsonResult.exitCode !== 0) {
+        console.warn(
+            `kubectl get service failed for ${service.namespace}/${service.name} on run ${runId}: ${serviceJsonResult.stderr || serviceJsonResult.stdout}`,
+        );
+        return null;
+    }
 
-    for (const serviceName of serviceNames) {
-        const proc = spawn({
-            cmd: ["minikube", "service", serviceName, "--url"],
-            stdout: "pipe",
-            stderr: "pipe",
-        });
+    let parsed: Record<string, unknown> = {};
+    try {
+        parsed = JSON.parse(serviceJsonResult.stdout) as Record<string, unknown>;
+    } catch {
+        return null;
+    }
 
-        const stdout = await new Response(proc.stdout).text();
-        const stderr = await new Response(proc.stderr).text();
-        const exitCode = await proc.exited;
+    const spec = (parsed.spec && typeof parsed.spec === "object")
+        ? (parsed.spec as Record<string, unknown>)
+        : {};
+    const ports = Array.isArray(spec.ports) ? spec.ports : [];
+    const firstPort = ports[0] as Record<string, unknown> | undefined;
+    const serviceType = String(spec.type ?? "ClusterIP");
 
-        if (exitCode === 0) {
-            const url = stdout.trim().split(/\r?\n/)[0]?.trim();
-            if (url) return url;
-        } else {
-            console.warn(`minikube service failed for ${serviceName} on run ${runId}: ${stderr || stdout}`);
+    if ((serviceType === "NodePort" || serviceType === "LoadBalancer") && firstPort) {
+        if (serviceType === "NodePort") {
+            const nodePort = Number(firstPort.nodePort ?? 0);
+            if (nodePort > 0) {
+                const ipResult = await runCommand("minikube", ["ip"], 10_000);
+                if (ipResult.exitCode === 0) {
+                    const host = ipResult.stdout.trim().split(/\r?\n/)[0]?.trim();
+                    if (host) {
+                        return `http://${host}:${nodePort}`;
+                    }
+                }
+            }
         }
+
+        if (serviceType === "LoadBalancer") {
+            const status = (parsed.status && typeof parsed.status === "object")
+                ? (parsed.status as Record<string, unknown>)
+                : {};
+            const lb = (status.loadBalancer && typeof status.loadBalancer === "object")
+                ? (status.loadBalancer as Record<string, unknown>)
+                : {};
+            const ingress = Array.isArray(lb.ingress) ? lb.ingress : [];
+            const firstIngress = ingress[0] as Record<string, unknown> | undefined;
+            const host = String(firstIngress?.ip ?? firstIngress?.hostname ?? "").trim();
+            const port = Number(firstPort.port ?? 0);
+            if (host && port > 0) {
+                return `http://${host}:${port}`;
+            }
+        }
+    }
+
+    const minikubeResult = await runCommand(
+        "minikube",
+        ["service", service.name, "--namespace", service.namespace, "--url"],
+        15_000,
+    );
+    if (minikubeResult.exitCode === 0) {
+        const url = minikubeResult.stdout.trim().split(/\r?\n/)[0]?.trim();
+        if (url) return url;
     }
 
     return null;
 }
 
-async function getServiceNamesFromManifest(manifestPath: string): Promise<string[]> {
-    const text = await Bun.file(manifestPath).text();
+function getServiceResources(resources: ManifestResource[]): ServiceResource[] {
+    const services: ServiceResource[] = [];
+    for (const resource of resources) {
+        if (resource.kind !== "Service") continue;
+        services.push({
+            ...resource,
+            kind: "Service",
+            spec: resource.spec ?? {},
+        });
+    }
+    return services;
+}
 
-    // Very light heuristic parser.
-    // Better than nothing, but not a full YAML parser.
-    const docs = text.split(/^---\s*$/m);
-    const names: string[] = [];
-
-    for (const doc of docs) {
-        const kindMatch = doc.match(/^\s*kind:\s*Service\s*$/im);
-        if (!kindMatch) continue;
-
-        const nameMatch = doc.match(/^\s*name:\s*([^\s]+)\s*$/im);
-        if (nameMatch && nameMatch[1]) {
-            names.push(nameMatch[1]);
-        }
+async function openRuntimeScanTarget(
+    service: ServiceResource,
+    runId: number,
+): Promise<{ url: string | null; cleanup: () => void }> {
+    const localPort = await allocateLocalPort(18080);
+    const servicePort = getPrimaryServicePort(service);
+    if (!servicePort) {
+        return {
+            url: null,
+            cleanup: () => { },
+        };
     }
 
-    return [...new Set(names)];
+    const proc = spawn({
+        cmd: [
+            "kubectl",
+            "port-forward",
+            "-n",
+            service.namespace,
+            `svc/${service.name}`,
+            `${localPort}:${servicePort}`,
+        ],
+        stdout: "pipe",
+        stderr: "pipe",
+    });
+
+    const outputReader = (async () => {
+        const [stdout, stderr] = await Promise.all([
+            new Response(proc.stdout).text(),
+            new Response(proc.stderr).text(),
+        ]);
+        return { stdout, stderr };
+    })();
+
+    const url = `http://127.0.0.1:${localPort}`;
+    const becameReady = await waitForHttpTarget(url, 20_000);
+
+    if (!becameReady) {
+        try {
+            proc.kill();
+        } catch {
+            // best effort
+        }
+
+        const output = await outputReader.catch(() => ({ stdout: "", stderr: "" }));
+        console.warn(
+            `kubectl port-forward did not become ready for ${service.namespace}/${service.name} on run ${runId}: ${output.stderr || output.stdout || "unknown error"}`,
+        );
+
+        return {
+            url: null,
+            cleanup: () => { },
+        };
+    }
+
+    return {
+        url,
+        cleanup: () => {
+            try {
+                proc.kill();
+            } catch {
+                // best effort
+            }
+        },
+    };
+}
+
+function getPrimaryServicePort(service: ServiceResource): number | null {
+    const ports = Array.isArray(service.spec.ports)
+        ? (service.spec.ports as Array<Record<string, unknown>>)
+        : [];
+    const firstPort = ports[0];
+    if (!firstPort) return null;
+
+    const targetPort = firstPort.targetPort;
+    if (typeof targetPort === "number" && Number.isFinite(targetPort)) {
+        return targetPort;
+    }
+
+    const port = Number(firstPort.port ?? 0);
+    return port > 0 ? port : null;
+}
+
+async function allocateLocalPort(basePort: number): Promise<number> {
+    // Good-enough deterministic allocation for a single worker flow.
+    const offset = Math.floor(Math.random() * 5000);
+    return basePort + offset;
+}
+
+async function waitForHttpTarget(url: string, timeoutMs: number): Promise<boolean> {
+    const start = Date.now();
+
+    while (Date.now() - start < timeoutMs) {
+        try {
+            const req = await fetch(url, {
+                method: "GET",
+            });
+
+            if (req.status >= 100) {
+                return true;
+            }
+        } catch {
+            // not ready yet
+        }
+
+        await Bun.sleep(500);
+    }
+
+    return false;
+}
+
+async function ensureManifestNamespaces(resources: ManifestResource[], runId: number) {
+    const namespaces = getNamespacesFromResources(resources);
+
+    for (const namespace of namespaces) {
+        const existsResult = await runCommand(
+            "kubectl",
+            ["get", "namespace", namespace, "-o", "name"],
+            15_000,
+        );
+        if (existsResult.exitCode === 0) continue;
+
+        const createResult = await runCommand(
+            "kubectl",
+            ["create", "namespace", namespace],
+            20_000,
+        );
+
+        if (createResult.exitCode !== 0) {
+            throw new Error(
+                `Failed to create namespace '${namespace}' for run ${runId}: ${createResult.stderr || createResult.stdout || "unknown error"}`,
+            );
+        }
+
+        logRun(runId, "info", `Created namespace '${namespace}'`, {
+            stage: "applying",
+        });
+    }
+}
+
+async function parseManifestResources(
+    manifestPath: string,
+    runId: number,
+): Promise<ManifestResource[]> {
+    const text = await Bun.file(manifestPath).text();
+    const docs = parseAllDocuments(text);
+    const resources: ManifestResource[] = [];
+
+    for (const doc of docs) {
+        const parsed = doc.toJSON();
+        collectManifestResources(parsed, resources);
+    }
+
+    if (resources.length === 0) {
+        throw new Error(`No Kubernetes resources parsed from manifest for run ${runId}`);
+    }
+
+    return resources;
+}
+
+function collectManifestResources(value: unknown, out: ManifestResource[]) {
+    if (!value || typeof value !== "object") return;
+
+    const node = value as Record<string, unknown>;
+    const kind = typeof node.kind === "string" ? node.kind : null;
+
+    if (kind === "List" && Array.isArray(node.items)) {
+        for (const item of node.items) {
+            collectManifestResources(item, out);
+        }
+        return;
+    }
+
+    if (!kind) return;
+
+    const metadata = (node.metadata && typeof node.metadata === "object")
+        ? (node.metadata as Record<string, unknown>)
+        : {};
+    const name = typeof metadata.name === "string" ? metadata.name : null;
+    if (!name) return;
+
+    const namespace = typeof metadata.namespace === "string" && metadata.namespace.trim()
+        ? metadata.namespace
+        : "default";
+
+    out.push({
+        kind,
+        name,
+        namespace,
+        spec: node.spec && typeof node.spec === "object"
+            ? (node.spec as Record<string, unknown>)
+            : undefined,
+    });
+}
+
+function getNamespacesFromResources(resources: ManifestResource[]): string[] {
+    const namespaces = new Set<string>();
+    for (const resource of resources) {
+        if (!resource.namespace || resource.namespace === "default") continue;
+        namespaces.add(resource.namespace);
+    }
+    return Array.from(namespaces);
+}
+
+async function runCommand(
+    command: string,
+    args: string[],
+    timeoutMs: number,
+): Promise<{ stdout: string; stderr: string; exitCode: number }> {
+    const proc = spawn({
+        cmd: [command, ...args],
+        stdout: "pipe",
+        stderr: "pipe",
+    });
+
+    const stdoutPromise = new Response(proc.stdout).text();
+    const stderrPromise = new Response(proc.stderr).text();
+
+    let timedOut = false;
+    const timeoutPromise = Bun.sleep(timeoutMs).then(() => {
+        timedOut = true;
+        try {
+            proc.kill();
+        } catch {
+            // best effort
+        }
+    });
+
+    await Promise.race([proc.exited, timeoutPromise]);
+    const [stdout, stderr] = await Promise.all([stdoutPromise, stderrPromise]);
+    const exitCode = await proc.exited;
+
+    if (timedOut) {
+        return {
+            stdout,
+            stderr: `Command timed out after ${timeoutMs}ms. ${stderr}`.trim(),
+            exitCode: exitCode ?? 1,
+        };
+    }
+
+    return {
+        stdout,
+        stderr,
+        exitCode,
+    };
 }
 
 async function runNucleiScan(targetUrl: string, runId: number): Promise<Finding[]> {
