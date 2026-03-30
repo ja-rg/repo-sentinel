@@ -36,7 +36,7 @@ type HealthReport = {
     status: CheckState;
     summary: string;
     active_workers: number;
-    stale_workers: number;
+    terminated_workers: number;
     workers: WorkerSnapshot[];
   };
 };
@@ -49,7 +49,10 @@ const REQUIRED_IMAGES = [
   "syft",
 ] as const;
 const WORKER_FRESHNESS_SECONDS = 15;
-export const WORKER_STALE_SECONDS = 60;
+const WORKER_HEARTBEAT_INTERVAL_SECONDS = 10;
+const WORKER_MISSED_HEARTBEATS_THRESHOLD = 3;
+export const WORKER_HEARTBEAT_TIMEOUT_SECONDS =
+  WORKER_HEARTBEAT_INTERVAL_SECONDS * WORKER_MISSED_HEARTBEATS_THRESHOLD;
 
 async function runCommand(
   cmd: string[],
@@ -297,9 +300,9 @@ function buildWorkerHealth() {
     ).get(WORKER_FRESHNESS_SECONDS) as { count: number } | undefined)?.count ??
       0,
   );
-  const stale_workers = Number(
+  const terminated_workers = Number(
     (db.query(
-      `SELECT COUNT(*) as count FROM worker_heartbeats WHERE status = 'stale'`,
+      `SELECT COUNT(*) as count FROM worker_heartbeats WHERE status = 'terminated'`,
     ).get() as { count: number } | undefined)?.count ?? 0,
   );
 
@@ -310,17 +313,18 @@ function buildWorkerHealth() {
         active_workers === 1 ? "" : "s"
       }`,
       active_workers,
-      stale_workers,
+      terminated_workers,
       workers,
     };
   }
 
-  if (stale_workers > 0) {
+  if (terminated_workers > 0) {
     return {
       status: "warn" as const,
-      summary: "no active worker heartbeat, but stale worker records exist",
+      summary:
+        "no active worker heartbeat, and terminated worker records were detected",
       active_workers,
-      stale_workers,
+      terminated_workers,
       workers,
     };
   }
@@ -329,7 +333,7 @@ function buildWorkerHealth() {
     status: "fail" as const,
     summary: "no workers available",
     active_workers,
-    stale_workers,
+    terminated_workers,
     workers,
   };
 }

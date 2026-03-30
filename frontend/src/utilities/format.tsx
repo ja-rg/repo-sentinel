@@ -38,7 +38,7 @@ export function toneForCheck(status?: CheckState) {
       return "text-zinc-300 border-zinc-700 bg-zinc-900";
   }
 }
-export const WORKER_STATUS = ["idle", "running", "stale", "error"] as const;
+export const WORKER_STATUS = ["idle", "running", "terminated", "error"] as const;
 export type WorkerStatus = (typeof WORKER_STATUS)[number];
 
 export function toneForWorkerStatus(status: WorkerStatus) {
@@ -49,7 +49,7 @@ export function toneForWorkerStatus(status: WorkerStatus) {
       return "text-emerald-300 border-emerald-500/40 bg-emerald-500/10";
     case "error":
       return "text-rose-300 border-rose-500/40 bg-rose-500/10";
-    case "stale":
+    case "terminated":
       return "text-zinc-300 border-zinc-700 bg-zinc-900/50";
     default:
       return "text-zinc-300 border-zinc-700 bg-zinc-900";

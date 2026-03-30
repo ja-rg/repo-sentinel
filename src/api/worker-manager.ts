@@ -9,7 +9,7 @@ export type WorkerHeartbeatStatus = WorkerStatus;
 
 export function heartbeatWorker(params: {
   workerId: string;
-  pid: number;
+  pid: number | null;
   status: WorkerHeartbeatStatus;
   currentRunId?: number | null;
   startedAt?: string;

@@ -1,5 +1,5 @@
 import type { HealthReport } from "../types";
-import { toneForCheck, toneForWorkerStatus } from "../utilities/format";
+import { toneForCheck } from "../utilities/format";
 import { cn } from "../utilities/json";
 
 export function Stat({ label, value }: { label: string; value: string }) {
@@ -96,7 +96,7 @@ export function HealthPanel({
             <span
               className={cn(
                 "inline-flex border px-2 py-1 text-xs uppercase tracking-wide",
-                toneForWorkerStatus(report.worker.status),
+                toneForCheck(report.worker.status),
               )}
             >
               {report.worker.status}
@@ -105,26 +105,24 @@ export function HealthPanel({
           {Array.isArray(report.worker.workers) &&
             report.worker.workers.length > 0 && (
               <div className="mt-3 space-y-2">
-                {report.worker.workers
-                  .filter((worker) => worker.status !== "stale")
-                  .map((worker) => {
-                    return (
-                      <div
-                        key={worker.worker_id}
-                        className="flex flex-wrap items-center justify-between gap-2 border-t border-zinc-800 pt-2 text-xs text-zinc-500 first:border-t-0 first:pt-0"
-                      >
-                        <span>{worker.worker_id}</span>
-                        <span>pid {worker.pid ?? "?"}</span>
-                        <span>{worker.status ?? "unknown"}</span>
-                        <span>
-                          {worker.current_run_id
-                            ? `run #${worker.current_run_id}`
-                            : "idle"}
-                        </span>
-                        <span>{worker.last_seen_at ?? "no heartbeat"}</span>
-                      </div>
-                    );
-                  })}
+                {report.worker.workers.map((worker) => {
+                  return (
+                    <div
+                      key={worker.worker_id}
+                      className="flex flex-wrap items-center justify-between gap-2 border-t border-zinc-800 pt-2 text-xs text-zinc-500 first:border-t-0 first:pt-0"
+                    >
+                      <span>{worker.worker_id}</span>
+                      <span>pid {worker.pid ?? "?"}</span>
+                      <span>{worker.status ?? "unknown"}</span>
+                      <span>
+                        {worker.current_run_id
+                          ? `run #${worker.current_run_id}`
+                          : "idle"}
+                      </span>
+                      <span>{worker.last_seen_at ?? "no heartbeat"}</span>
+                    </div>
+                  );
+                })}
               </div>
             )}
         </div>

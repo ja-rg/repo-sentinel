@@ -12,21 +12,80 @@ import { heartbeatWorker } from "./src/api/worker-manager";
 
 const workerId = `${hostname()}-${process.pid}`;
 const startedAt = new Date().toISOString();
+const HEARTBEAT_INTERVAL_MS = 10000;
+
+type BeatStatus = "idle" | "running" | "error" | "terminated";
+
+const heartbeatState: {
+  status: BeatStatus;
+  currentRunId: number | null;
+  details?: unknown;
+} = {
+  status: "idle",
+  currentRunId: null,
+  details: { phase: "boot" },
+};
 
 async function beat(
-  status: "idle" | "running" | "error",
+  status: BeatStatus,
   currentRunId?: number | null,
   details?: unknown,
 ) {
+  heartbeatState.status = status;
+  heartbeatState.currentRunId = currentRunId ?? null;
+  heartbeatState.details = details;
+
   heartbeatWorker({
     workerId,
-    pid: process.pid,
+    pid: status === "terminated" ? null : process.pid,
     status,
     currentRunId,
     startedAt,
     details,
   });
 }
+
+const heartbeatTimer = setInterval(() => {
+  void beat(
+    heartbeatState.status,
+    heartbeatState.currentRunId,
+    heartbeatState.details,
+  );
+}, HEARTBEAT_INTERVAL_MS);
+
+function markTerminated(reason: string) {
+  clearInterval(heartbeatTimer);
+  try {
+    heartbeatWorker({
+      workerId,
+      pid: null,
+      status: "terminated",
+      currentRunId: null,
+      startedAt,
+      details: {
+        reason,
+        previous_status: heartbeatState.status,
+        previous_run_id: heartbeatState.currentRunId,
+      },
+    });
+  } catch {
+    // best effort only during shutdown
+  }
+}
+
+process.once("SIGINT", () => {
+  markTerminated("sigint");
+  process.exit(0);
+});
+
+process.once("SIGTERM", () => {
+  markTerminated("sigterm");
+  process.exit(0);
+});
+
+process.once("beforeExit", () => {
+  markTerminated("before_exit");
+});
 
 await beat("idle", null, { phase: "boot" });
 

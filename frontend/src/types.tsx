@@ -42,14 +42,14 @@ export type HealthReport = {
   service?: string;
   database?: unknown;
   worker?: {
-    status: WorkerStatus
+    status: CheckState;
     summary: string;
     active_workers?: number;
-    stale_workers?: number;
+    terminated_workers?: number;
     workers?: Array<{
       worker_id: string;
       pid?: number;
-      status?: string;
+      status?: WorkerStatus;
       current_run_id?: number | null;
       last_seen_at?: string;
     }>;

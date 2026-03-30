@@ -21,7 +21,7 @@ export type RunStatus = typeof RUN_STATUS[number];
 export const WORKER_STATUS = [
   "idle",
   "running",
-  "stale",
+  "terminated",
   "error",
 ] as const;
 export type WorkerStatus = typeof WORKER_STATUS[number];
@@ -70,6 +70,68 @@ const ensureSchema = db.transaction(() => {
     CREATE INDEX IF NOT EXISTS idx_worker_heartbeats_last_seen
     ON worker_heartbeats(last_seen_at)
   `);
+
+  const workerHeartbeatsTable = db.query(`
+    SELECT sql
+    FROM sqlite_master
+    WHERE type = 'table' AND name = 'worker_heartbeats'
+  `).get() as { sql?: string } | undefined;
+
+  const requiresWorkerHeartbeatsMigration =
+    workerHeartbeatsTable?.sql?.includes("'stale'") ||
+    !workerHeartbeatsTable?.sql?.includes("'terminated'");
+
+  if (requiresWorkerHeartbeatsMigration) {
+    db.run(`ALTER TABLE worker_heartbeats RENAME TO worker_heartbeats_old`);
+
+    db.run(`
+      CREATE TABLE worker_heartbeats (
+        worker_id TEXT PRIMARY KEY,
+        pid INTEGER,
+        status TEXT NOT NULL CHECK (status IN (${WORKER_STATUS.map(s => `'${s}'`).join(",")})),
+        current_run_id INTEGER,
+        hostname TEXT,
+        started_at TEXT NOT NULL DEFAULT (datetime('now')),
+        last_seen_at TEXT NOT NULL DEFAULT (datetime('now')),
+        details_json TEXT,
+        FOREIGN KEY (current_run_id) REFERENCES analysis_runs(id)
+      )
+    `);
+
+    db.run(`
+      INSERT INTO worker_heartbeats (
+        worker_id,
+        pid,
+        status,
+        current_run_id,
+        hostname,
+        started_at,
+        last_seen_at,
+        details_json
+      )
+      SELECT
+        worker_id,
+        pid,
+        CASE
+          WHEN status = 'stale' THEN 'terminated'
+          WHEN status IN ('idle', 'running', 'terminated', 'error') THEN status
+          ELSE 'terminated'
+        END,
+        current_run_id,
+        hostname,
+        started_at,
+        last_seen_at,
+        details_json
+      FROM worker_heartbeats_old
+    `);
+
+    db.run(`DROP TABLE worker_heartbeats_old`);
+
+    db.run(`
+      CREATE INDEX IF NOT EXISTS idx_worker_heartbeats_last_seen
+      ON worker_heartbeats(last_seen_at)
+    `);
+  }
 
   db.run(`
     CREATE TABLE IF NOT EXISTS analysis_run_logs (
