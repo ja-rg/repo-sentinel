@@ -264,6 +264,25 @@ function App() {
     () => parseJson(selectedRun?.decision_json),
     [selectedRun],
   );
+  const manifestFindingsJson = useMemo(
+    () => parseJson(selectedRun?.findings_json),
+    [selectedRun?.findings_json],
+  );
+
+  function downloadManifestFindings() {
+    if (!selectedRun || selectedRun.kind !== "k8s_manifest") return;
+
+    const pretty = JSON.stringify(manifestFindingsJson ?? null, null, 2);
+    const blob = new Blob([pretty], { type: "application/json" });
+    const url = URL.createObjectURL(blob);
+    const anchor = document.createElement("a");
+    anchor.href = url;
+    anchor.download = `run-${selectedRun.id}-k8s-manifest-findings.json`;
+    document.body.appendChild(anchor);
+    anchor.click();
+    document.body.removeChild(anchor);
+    URL.revokeObjectURL(url);
+  }
 
   return (
     <div className="min-h-screen bg-zinc-950 text-zinc-100">
@@ -536,6 +555,17 @@ function App() {
                     <EmptyState message="No findings yet." compact />
                   ) : (
                     <div className="space-y-5">
+                      {selectedRun.kind === "k8s_manifest" && (
+                        <div className="flex justify-end">
+                          <button
+                            type="button"
+                            onClick={downloadManifestFindings}
+                            className="inline-flex items-center justify-center border border-zinc-700 bg-zinc-900 px-3 py-2 text-xs uppercase tracking-[0.14em] text-zinc-200 hover:border-zinc-500 hover:bg-zinc-800"
+                          >
+                            Download findings JSON
+                          </button>
+                        </div>
+                      )}
                       {findingsSections.map((section) => (
                         <FindingsSectionView
                           key={section.key}
