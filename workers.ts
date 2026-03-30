@@ -18,14 +18,19 @@ function cleanupStaleWorkers() {
         process.kill(worker.pid);
       } catch {}
     }
-
-    db.run(
-      `
-      UPDATE worker_heartbeats
-      SET status = 'stale', pid = NULL
-      WHERE worker_id = ?1
-    `,
-      [worker.worker_id],
-    );
   }
+
+  const markStale = db.query(`
+    UPDATE worker_heartbeats
+    SET status = 'stale', pid = NULL
+    WHERE worker_id = ?1
+  `);
+
+  const applyStaleUpdates = db.transaction((workerIds: string[]) => {
+    for (const workerId of workerIds) {
+      markStale.run(workerId);
+    }
+  });
+
+  applyStaleUpdates(stale.map((worker) => worker.worker_id));
 }

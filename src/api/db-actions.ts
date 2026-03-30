@@ -30,63 +30,67 @@ export type WorkerStatus = typeof WORKER_STATUS[number];
  * Bun SQLite is much safer here if schema creation is done
  * statement-by-statement instead of one huge db.run(`...; ...; ...`)
  */
-db.run(`
-  CREATE TABLE IF NOT EXISTS analysis_runs (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    kind TEXT NOT NULL CHECK (kind IN (${RUN_KINDS.map(k => `'${k}'`).join(",")})),
-    input_ref TEXT NOT NULL,
-    status TEXT NOT NULL CHECK (status IN (${RUN_STATUS.map(k => `'${k}'`).join(",")})) DEFAULT 'pending',
-    stage TEXT,
-    findings_json TEXT,
-    decision_json TEXT,
-    error_text TEXT,
-    created_at TEXT NOT NULL DEFAULT (datetime('now')),
-    started_at TEXT,
-    finished_at TEXT
-  )
-`);
+const ensureSchema = db.transaction(() => {
+  db.run(`
+    CREATE TABLE IF NOT EXISTS analysis_runs (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      kind TEXT NOT NULL CHECK (kind IN (${RUN_KINDS.map(k => `'${k}'`).join(",")})),
+      input_ref TEXT NOT NULL,
+      status TEXT NOT NULL CHECK (status IN (${RUN_STATUS.map(k => `'${k}'`).join(",")})) DEFAULT 'pending',
+      stage TEXT,
+      findings_json TEXT,
+      decision_json TEXT,
+      error_text TEXT,
+      created_at TEXT NOT NULL DEFAULT (datetime('now')),
+      started_at TEXT,
+      finished_at TEXT
+    )
+  `);
 
-db.run(`
-  CREATE INDEX IF NOT EXISTS idx_analysis_runs_status_created_at
-  ON analysis_runs(status, created_at)
-`);
+  db.run(`
+    CREATE INDEX IF NOT EXISTS idx_analysis_runs_status_created_at
+    ON analysis_runs(status, created_at)
+  `);
 
-db.run(`
-  CREATE TABLE IF NOT EXISTS worker_heartbeats (
-    worker_id TEXT PRIMARY KEY,
-    pid INTEGER,
-    status TEXT NOT NULL CHECK (status IN (${WORKER_STATUS.map(s => `'${s}'`).join(",")})),
-    current_run_id INTEGER,
-    hostname TEXT,
-    started_at TEXT NOT NULL DEFAULT (datetime('now')),
-    last_seen_at TEXT NOT NULL DEFAULT (datetime('now')),
-    details_json TEXT,
-    FOREIGN KEY (current_run_id) REFERENCES analysis_runs(id)
-  )
-`);
+  db.run(`
+    CREATE TABLE IF NOT EXISTS worker_heartbeats (
+      worker_id TEXT PRIMARY KEY,
+      pid INTEGER,
+      status TEXT NOT NULL CHECK (status IN (${WORKER_STATUS.map(s => `'${s}'`).join(",")})),
+      current_run_id INTEGER,
+      hostname TEXT,
+      started_at TEXT NOT NULL DEFAULT (datetime('now')),
+      last_seen_at TEXT NOT NULL DEFAULT (datetime('now')),
+      details_json TEXT,
+      FOREIGN KEY (current_run_id) REFERENCES analysis_runs(id)
+    )
+  `);
 
-db.run(`
-  CREATE INDEX IF NOT EXISTS idx_worker_heartbeats_last_seen
-  ON worker_heartbeats(last_seen_at)
-`);
+  db.run(`
+    CREATE INDEX IF NOT EXISTS idx_worker_heartbeats_last_seen
+    ON worker_heartbeats(last_seen_at)
+  `);
 
-db.run(`
-  CREATE TABLE IF NOT EXISTS analysis_run_logs (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    run_id INTEGER NOT NULL,
-    level TEXT NOT NULL CHECK (level IN ('debug','info','warn','error')),
-    stage TEXT,
-    message TEXT NOT NULL,
-    details_json TEXT,
-    created_at TEXT NOT NULL DEFAULT (datetime('now')),
-    FOREIGN KEY (run_id) REFERENCES analysis_runs(id)
-  )
-`);
+  db.run(`
+    CREATE TABLE IF NOT EXISTS analysis_run_logs (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      run_id INTEGER NOT NULL,
+      level TEXT NOT NULL CHECK (level IN ('debug','info','warn','error')),
+      stage TEXT,
+      message TEXT NOT NULL,
+      details_json TEXT,
+      created_at TEXT NOT NULL DEFAULT (datetime('now')),
+      FOREIGN KEY (run_id) REFERENCES analysis_runs(id)
+    )
+  `);
 
-db.run(`
-  CREATE INDEX IF NOT EXISTS idx_analysis_run_logs_run_id_created_at
-  ON analysis_run_logs(run_id, created_at)
-`);
+  db.run(`
+    CREATE INDEX IF NOT EXISTS idx_analysis_run_logs_run_id_created_at
+    ON analysis_run_logs(run_id, created_at)
+  `);
+});
+
+ensureSchema();
 
 export const insertRun = db.query(`
   INSERT INTO analysis_runs (kind, input_ref, status)

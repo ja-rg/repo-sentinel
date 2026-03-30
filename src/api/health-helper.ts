@@ -284,18 +284,6 @@ async function checkKubernetes(): Promise<HealthCheck> {
 }
 
 function buildWorkerHealth() {
-  db.run(`
-    CREATE TABLE IF NOT EXISTS worker_heartbeats (
-      worker_id TEXT PRIMARY KEY,
-      pid INTEGER,
-      status TEXT NOT NULL,
-      current_run_id INTEGER,
-      started_at TEXT NOT NULL DEFAULT (datetime('now')),
-      last_seen_at TEXT NOT NULL DEFAULT (datetime('now')),
-      details_json TEXT
-    )
-  `);
-
   const workers = db.query(`
     SELECT worker_id, pid, status, current_run_id, started_at, last_seen_at
     FROM worker_heartbeats
