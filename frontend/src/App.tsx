@@ -23,7 +23,6 @@ import {
   Meta,
 } from "./components/meta";
 import { Subsection, SectionTitle, Field } from "./components/sections";
-import { JsonBlock } from "./utilities/json-block";
 
 const API_BASE = "http://localhost:3000";
 const POLL_MS = 5000;
