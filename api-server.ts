@@ -190,7 +190,7 @@ app.get("*", async (c) => {
 
 app.notFound((c) => c.json({ error: "Not found" }, 404));
 
-const port = Number(process.env.PORT ?? 3000);
+const port = Number(process.env.PORT ?? 2002);
 const server = Bun.serve({ port, fetch: app.fetch });
 
 console.log(

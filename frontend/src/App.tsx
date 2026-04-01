@@ -24,7 +24,7 @@ import {
 } from "./components/meta";
 import { Subsection, SectionTitle, Field } from "./components/sections";
 
-const API_BASE = "http://localhost:3000";
+const API_BASE = "http://localhost:2002";
 const POLL_MS = 5000;
 
 const kindMeta: Record<
