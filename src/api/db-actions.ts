@@ -39,6 +39,7 @@ const ensureSchema = db.transaction(() => {
       input_ref TEXT NOT NULL,
       status TEXT NOT NULL CHECK (status IN (${RUN_STATUS.map(k => `'${k}'`).join(",")})) DEFAULT 'pending',
       stage TEXT,
+      tool_options_json TEXT,
       findings_json TEXT,
       decision_json TEXT,
       error_text TEXT,
@@ -71,6 +72,7 @@ const ensureSchema = db.transaction(() => {
         input_ref TEXT NOT NULL,
         status TEXT NOT NULL CHECK (status IN (${RUN_STATUS.map(k => `'${k}'`).join(",")})) DEFAULT 'pending',
         stage TEXT,
+        tool_options_json TEXT,
         findings_json TEXT,
         decision_json TEXT,
         error_text TEXT,
@@ -87,6 +89,7 @@ const ensureSchema = db.transaction(() => {
         input_ref,
         status,
         stage,
+        tool_options_json,
         findings_json,
         decision_json,
         error_text,
@@ -100,6 +103,7 @@ const ensureSchema = db.transaction(() => {
         input_ref,
         status,
         stage,
+        NULL,
         findings_json,
         decision_json,
         error_text,
@@ -320,22 +324,57 @@ const ensureSchema = db.transaction(() => {
     CREATE INDEX IF NOT EXISTS idx_analysis_run_logs_run_id_created_at
     ON analysis_run_logs(run_id, created_at)
   `);
+
+  db.run(`
+    CREATE TABLE IF NOT EXISTS analysis_run_commands (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      run_id INTEGER NOT NULL,
+      tool TEXT NOT NULL,
+      stage TEXT,
+      image TEXT NOT NULL,
+      command_text TEXT NOT NULL,
+      command_json TEXT NOT NULL,
+      stdout_text TEXT,
+      stderr_text TEXT,
+      exit_code INTEGER,
+      status TEXT NOT NULL CHECK (status IN ('running','done','failed')) DEFAULT 'running',
+      started_at TEXT NOT NULL DEFAULT (datetime('now')),
+      finished_at TEXT,
+      duration_ms INTEGER,
+      FOREIGN KEY (run_id) REFERENCES analysis_runs(id)
+    )
+  `);
+
+  db.run(`
+    CREATE INDEX IF NOT EXISTS idx_analysis_run_commands_run_id_id
+    ON analysis_run_commands(run_id, id)
+  `);
+
+  const hasToolOptionsColumn = db.query(`
+    SELECT 1
+    FROM pragma_table_info('analysis_runs')
+    WHERE name = 'tool_options_json'
+  `).get();
+
+  if (!hasToolOptionsColumn) {
+    db.run(`ALTER TABLE analysis_runs ADD COLUMN tool_options_json TEXT`);
+  }
 });
 
 ensureSchema();
 
 export const insertRun = db.query(`
-  INSERT INTO analysis_runs (kind, input_ref, status)
-  VALUES (?1, ?2, 'pending')
+  INSERT INTO analysis_runs (kind, input_ref, status, tool_options_json)
+  VALUES (?1, ?2, 'pending', ?3)
   RETURNING
-    id, kind, input_ref, status, stage,
+    id, kind, input_ref, status, stage, tool_options_json,
     findings_json, decision_json, error_text,
     created_at, started_at, finished_at
 `);
 
 export const getRun = db.query(`
   SELECT
-    id, kind, input_ref, status, stage,
+    id, kind, input_ref, status, stage, tool_options_json,
     findings_json, decision_json, error_text,
     created_at, started_at, finished_at
   FROM analysis_runs
@@ -344,7 +383,7 @@ export const getRun = db.query(`
 
 export const listRuns = db.query(`
   SELECT
-    id, kind, input_ref, status, stage,
+    id, kind, input_ref, status, stage, tool_options_json,
     findings_json, decision_json, error_text,
     created_at, started_at, finished_at
   FROM analysis_runs
@@ -366,7 +405,7 @@ export const claimNextPendingRun = db.query(`
     LIMIT 1
   )
   RETURNING
-    id, kind, input_ref, status, stage,
+    id, kind, input_ref, status, stage, tool_options_json,
     findings_json, decision_json, error_text,
     created_at, started_at, finished_at
 `);
@@ -376,7 +415,7 @@ export const markRunStage = db.query(`
   SET stage = ?2
   WHERE id = ?1
   RETURNING
-    id, kind, input_ref, status, stage,
+    id, kind, input_ref, status, stage, tool_options_json,
     findings_json, decision_json, error_text,
     created_at, started_at, finished_at
 `);
@@ -392,7 +431,7 @@ export const markRunDone = db.query(`
     finished_at = datetime('now')
   WHERE id = ?1
   RETURNING
-    id, kind, input_ref, status, stage,
+    id, kind, input_ref, status, stage, tool_options_json,
     findings_json, decision_json, error_text,
     created_at, started_at, finished_at
 `);
@@ -406,7 +445,7 @@ export const markRunFailed = db.query(`
     finished_at = datetime('now')
   WHERE id = ?1
   RETURNING
-    id, kind, input_ref, status, stage,
+    id, kind, input_ref, status, stage, tool_options_json,
     findings_json, decision_json, error_text,
     created_at, started_at, finished_at
 `);
@@ -451,6 +490,51 @@ export const listRunLogs = db.query(`
   SELECT
     id, run_id, level, stage, message, details_json, created_at
   FROM analysis_run_logs
+  WHERE run_id = ?1
+  ORDER BY id ASC
+  LIMIT ?2
+`);
+
+export const insertRunCommand = db.query(`
+  INSERT INTO analysis_run_commands (
+    run_id,
+    tool,
+    stage,
+    image,
+    command_text,
+    command_json,
+    status
+  )
+  VALUES (?1, ?2, ?3, ?4, ?5, ?6, 'running')
+  RETURNING id, run_id, tool, stage, image, command_text, command_json, status, started_at
+`);
+
+export const finishRunCommand = db.query(`
+  UPDATE analysis_run_commands
+  SET
+    stdout_text = ?2,
+    stderr_text = ?3,
+    exit_code = ?4,
+    status = CASE WHEN ?4 = 0 THEN 'done' ELSE 'failed' END,
+    finished_at = datetime('now'),
+    duration_ms = ?5
+  WHERE id = ?1
+  RETURNING
+    id, run_id, tool, stage, image,
+    command_text, command_json,
+    stdout_text, stderr_text,
+    exit_code, status,
+    started_at, finished_at, duration_ms
+`);
+
+export const listRunCommands = db.query(`
+  SELECT
+    id, run_id, tool, stage, image,
+    command_text, command_json,
+    stdout_text, stderr_text,
+    exit_code, status,
+    started_at, finished_at, duration_ms
+  FROM analysis_run_commands
   WHERE run_id = ?1
   ORDER BY id ASC
   LIMIT ?2

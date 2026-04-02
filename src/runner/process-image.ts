@@ -1,7 +1,8 @@
 import { spawn } from "bun";
 import { type Run, setRunStage } from "./update-runs";
-import { dockerRun } from "./docker";
+import { executeDockerTool } from "./docker";
 import { logRun } from "../api/worker-manager";
+import { resolveRunToolInvocation, shouldLogVerboseCommands } from "./tooling";
 
 type Findings = Record<string, unknown>;
 
@@ -27,7 +28,7 @@ export async function processImage(run: Run) {
 
         setRunStage(run.id, "running-trivy", "Running Trivy image scan");
         logRun(run.id, "info", "Trivy image scan started", { stage: "running-trivy" });
-        findings["trivy"] = await runTrivyImage(imageRef, run.id);
+        findings["trivy"] = await runTrivyImage(imageRef, run.id, run);
         logRun(run.id, "info", "Trivy image scan finished", {
             stage: "running-trivy",
             details: {
@@ -37,12 +38,12 @@ export async function processImage(run: Run) {
 
         setRunStage(run.id, "running-syft", "Running Syft SBOM scan");
         logRun(run.id, "info", "Syft image scan started", { stage: "running-syft" });
-        findings["syft"] = await runSyftImage(imageRef, run.id);
+        findings["syft"] = await runSyftImage(imageRef, run.id, run);
         logRun(run.id, "info", "Syft image scan finished", { stage: "running-syft" });
 
         setRunStage(run.id, "running-grype", "Running Grype vulnerability scan");
         logRun(run.id, "info", "Grype image scan started", { stage: "running-grype" });
-        findings["grype"] = await runGrypeImage(imageRef, run.id);
+        findings["grype"] = await runGrypeImage(imageRef, run.id, run);
         logRun(run.id, "info", "Grype image scan finished", {
             stage: "running-grype",
             details: {
@@ -135,61 +136,76 @@ async function runDockerInspect(imageRef: string, runId: number) {
     return Array.isArray(parsed) ? parsed[0] ?? null : parsed;
 }
 
-async function runTrivyImage(imageRef: string, runId: number) {
-    const proc = dockerRun(
-        ["image", "--quiet", "--format", "json", imageRef],
-        "aquasec/trivy:canary",
-        [{ containerPath: "/var/run/docker.sock", hostPath: "/var/run/docker.sock" }]
-    );
+async function runTrivyImage(imageRef: string, runId: number, run: Run) {
+    const invocation = resolveRunToolInvocation(run, "trivy", {
+        image: "aquasec/trivy:canary",
+        command: ["image", "--quiet", "--format", "json", imageRef],
+    });
+    if (!invocation) return [];
 
-    const outputText = await proc.stdout.text();
-    const exitCode = await proc.exited;
+    const result = await executeDockerTool({
+        runId,
+        tool: "trivy",
+        stage: "running-trivy",
+        command: invocation.command,
+        image: invocation.image,
+        volumes: [{ containerPath: "/var/run/docker.sock", hostPath: "/var/run/docker.sock" }],
+        verbose: shouldLogVerboseCommands(run),
+    });
 
-    if (exitCode !== 0) {
-        const errText =
-            typeof proc.stderr === "string" ? proc.stderr : "Trivy image execution failed";
-        throw new Error(`Trivy image scan failed for run ${runId} with exit code ${exitCode}: ${errText}`);
+    if (result.exitCode !== 0) {
+        throw new Error(`Trivy image scan failed for run ${runId} with exit code ${result.exitCode}: ${result.stderr || "Trivy image execution failed"}`);
     }
 
-    const parsed = JSON.parse(outputText);
+    const parsed = JSON.parse(result.stdout);
     return parsed.Results || parsed;
 }
 
-async function runSyftImage(imageRef: string, runId: number) {
-    const proc = dockerRun(
-        ["-o", "cyclonedx-json", `docker:${imageRef}`],
-        "anchore/syft:latest",
-        [{ containerPath: "/var/run/docker.sock", hostPath: "/var/run/docker.sock" }]
-    );
+async function runSyftImage(imageRef: string, runId: number, run: Run) {
+    const invocation = resolveRunToolInvocation(run, "syft", {
+        image: "anchore/syft:latest",
+        command: ["-o", "cyclonedx-json", `docker:${imageRef}`],
+    });
+    if (!invocation) return { skipped: true };
 
-    const outputText = await proc.stdout.text();
-    const exitCode = await proc.exited;
+    const result = await executeDockerTool({
+        runId,
+        tool: "syft",
+        stage: "running-syft",
+        command: invocation.command,
+        image: invocation.image,
+        volumes: [{ containerPath: "/var/run/docker.sock", hostPath: "/var/run/docker.sock" }],
+        verbose: shouldLogVerboseCommands(run),
+    });
 
-    if (exitCode !== 0) {
-        const errText =
-            typeof proc.stderr === "string" ? proc.stderr : "Syft image execution failed";
-        throw new Error(`Syft image SBOM failed for run ${runId} with exit code ${exitCode}: ${errText}`);
+    if (result.exitCode !== 0) {
+        throw new Error(`Syft image SBOM failed for run ${runId} with exit code ${result.exitCode}: ${result.stderr || "Syft image execution failed"}`);
     }
 
-    return JSON.parse(outputText);
+    return JSON.parse(result.stdout);
 }
 
-async function runGrypeImage(imageRef: string, runId: number) {
-    const proc = dockerRun(
-        ["-o", "json", `docker:${imageRef}`],
-        "anchore/grype:latest",
-        [{ containerPath: "/var/run/docker.sock", hostPath: "/var/run/docker.sock" }],
-    );
+async function runGrypeImage(imageRef: string, runId: number, run: Run) {
+    const invocation = resolveRunToolInvocation(run, "grype", {
+        image: "anchore/grype:latest",
+        command: ["-o", "json", `docker:${imageRef}`],
+    });
+    if (!invocation) return [];
 
-    const outputText = await proc.stdout.text();
-    const exitCode = await proc.exited;
+    const result = await executeDockerTool({
+        runId,
+        tool: "grype",
+        stage: "running-grype",
+        command: invocation.command,
+        image: invocation.image,
+        volumes: [{ containerPath: "/var/run/docker.sock", hostPath: "/var/run/docker.sock" }],
+        verbose: shouldLogVerboseCommands(run),
+    });
 
-    if (exitCode !== 0) {
-        const errText =
-            typeof proc.stderr === "string" ? proc.stderr : "Grype image execution failed";
-        throw new Error(`Grype image scan failed for run ${runId} with exit code ${exitCode}: ${errText}`);
+    if (result.exitCode !== 0) {
+        throw new Error(`Grype image scan failed for run ${runId} with exit code ${result.exitCode}: ${result.stderr || "Grype image execution failed"}`);
     }
 
-    const parsed = JSON.parse(outputText);
+    const parsed = JSON.parse(result.stdout);
     return parsed.matches || parsed;
 }

@@ -3,10 +3,11 @@ import { existsSync } from "node:fs";
 import { join, extname } from "node:path";
 import { spawn } from "bun";
 
-import { dockerRun } from "./docker";
+import { executeDockerTool } from "./docker";
 import { type Run, setRunStage } from "./update-runs";
 import { DATA_DIR } from "../db";
 import { logRun } from "../api/worker-manager";
+import { resolveRunToolInvocation, shouldLogVerboseCommands } from "./tooling";
 
 type Findings = Record<string, unknown>;
 
@@ -54,7 +55,7 @@ export async function processRepoOrArchive(run: Run) {
 
         setRunStage(run.id, "running-semgrep", "Running Semgrep");
         logRun(run.id, "info", "Semgrep started", { stage: "running-semgrep" });
-        findings["semgrep"] = await runSemgrep(scanTarget, run.id);
+        findings["semgrep"] = await runSemgrep(scanTarget, run.id, run);
         logRun(run.id, "info", "Semgrep finished", {
             stage: "running-semgrep",
             details: { resultCount: Array.isArray(findings["semgrep"]) ? findings["semgrep"].length : 0 },
@@ -62,7 +63,7 @@ export async function processRepoOrArchive(run: Run) {
 
         setRunStage(run.id, "running-trivy", "Running Trivy");
         logRun(run.id, "info", "Trivy started", { stage: "running-trivy" });
-        findings["trivy"] = await runTrivyFs(scanTarget, run.id);
+        findings["trivy"] = await runTrivyFs(scanTarget, run.id, run);
         logRun(run.id, "info", "Trivy finished", {
             stage: "running-trivy",
             details: { resultCount: Array.isArray(findings["trivy"]) ? findings["trivy"].length : 0 },
@@ -70,7 +71,7 @@ export async function processRepoOrArchive(run: Run) {
 
         setRunStage(run.id, "running-gitleaks", "Running Gitleaks");
         logRun(run.id, "info", "Gitleaks started", { stage: "running-gitleaks" });
-        findings["gitleaks"] = await runGitleaks(scanTarget, run.id);
+        findings["gitleaks"] = await runGitleaks(scanTarget, run.id, run);
         logRun(run.id, "info", "Gitleaks finished", {
             stage: "running-gitleaks",
             details: { resultCount: Array.isArray(findings["gitleaks"]) ? findings["gitleaks"].length : 0 },
@@ -78,7 +79,7 @@ export async function processRepoOrArchive(run: Run) {
 
         setRunStage(run.id, "running-syft", "Running Syft");
         logRun(run.id, "info", "Syft started", { stage: "running-syft" });
-        findings["syft"] = await runSyft(scanTarget, run.id);
+        findings["syft"] = await runSyft(scanTarget, run.id, run);
 
         const syftComponentCount =
             typeof findings["syft"] === "object" && findings["syft"] !== null
@@ -228,7 +229,13 @@ async function assertDirectoryHasFiles(dir: string) {
     }
 }
 
-async function runSemgrep(scanTarget: string, runId: number) {
+async function runSemgrep(scanTarget: string, runId: number, run: Run) {
+    const invocation = resolveRunToolInvocation(run, "semgrep", {
+        image: "semgrep/semgrep:latest",
+        command: ["semgrep", "--config", "auto", "--json", "--no-git-ignore", "/src"],
+    });
+    if (!invocation) return [];
+
     const volumes = [
         {
             hostPath: scanTarget,
@@ -236,26 +243,31 @@ async function runSemgrep(scanTarget: string, runId: number) {
         },
     ];
 
-    const proc = dockerRun(
-        ["semgrep", "--config", "auto", "--json", "--no-git-ignore", "/src"],
-        "semgrep/semgrep:latest",
-        volumes
-    );
+    const result = await executeDockerTool({
+        runId,
+        tool: "semgrep",
+        stage: "running-semgrep",
+        command: invocation.command,
+        image: invocation.image,
+        volumes,
+        verbose: shouldLogVerboseCommands(run),
+    });
 
-    const outputText = await proc.stdout.text();
-    const exitCode = await proc.exited;
-
-    if (exitCode !== 0) {
-        const errText =
-            typeof proc.stderr === "string" ? proc.stderr : "Semgrep execution failed";
-        throw new Error(`Semgrep failed with exit code ${exitCode}: ${errText}`);
+    if (result.exitCode !== 0) {
+        throw new Error(`Semgrep failed with exit code ${result.exitCode}: ${result.stderr || "Semgrep execution failed"}`);
     }
 
-    const parsed = JSON.parse(outputText);
+    const parsed = JSON.parse(result.stdout);
     return parsed.results || [];
 }
 
-async function runTrivyFs(scanTarget: string, runId: number) {
+async function runTrivyFs(scanTarget: string, runId: number, run: Run) {
+    const invocation = resolveRunToolInvocation(run, "trivy", {
+        image: "aquasec/trivy:canary",
+        command: ["fs", "--quiet", "--format", "json", "/project"],
+    });
+    if (!invocation) return [];
+
     const volumes = [
         {
             hostPath: scanTarget,
@@ -263,35 +275,28 @@ async function runTrivyFs(scanTarget: string, runId: number) {
         },
     ];
 
-    const proc = dockerRun(
-        ["fs", "--quiet", "--format", "json", "/project"],
-        "aquasec/trivy:canary",
-        volumes
-    );
+    const result = await executeDockerTool({
+        runId,
+        tool: "trivy",
+        stage: "running-trivy",
+        command: invocation.command,
+        image: invocation.image,
+        volumes,
+        verbose: shouldLogVerboseCommands(run),
+    });
 
-    const outputText = await proc.stdout.text();
-    const exitCode = await proc.exited;
-
-    if (exitCode !== 0) {
-        const errText =
-            typeof proc.stderr === "string" ? proc.stderr : "Trivy execution failed";
-        throw new Error(`Trivy failed with exit code ${exitCode}: ${errText}`);
+    if (result.exitCode !== 0) {
+        throw new Error(`Trivy failed with exit code ${result.exitCode}: ${result.stderr || "Trivy execution failed"}`);
     }
 
-    const parsed = JSON.parse(outputText);
+    const parsed = JSON.parse(result.stdout);
     return parsed.Results || [];
 }
 
-async function runGitleaks(scanTarget: string, runId: number) {
-    const volumes = [
-        {
-            hostPath: scanTarget,
-            containerPath: "/path",
-        },
-    ];
-
-    const proc = dockerRun(
-        [
+async function runGitleaks(scanTarget: string, runId: number, run: Run) {
+    const invocation = resolveRunToolInvocation(run, "gitleaks", {
+        image: "zricethezav/gitleaks:latest",
+        command: [
             "detect",
             "--source=/path",
             "--report-format",
@@ -299,14 +304,30 @@ async function runGitleaks(scanTarget: string, runId: number) {
             "--report-path",
             "-",
             "--no-banner",
-            "--no-git", // disable built-in git scanning since we're mounting the filesystem directly
+            "--no-git",
         ],
-        "zricethezav/gitleaks:latest",
-        volumes
-    );
+    });
+    if (!invocation) return [];
 
-    const stdoutText = await proc.stdout.text();
-    const exitCode = await proc.exited;
+    const volumes = [
+        {
+            hostPath: scanTarget,
+            containerPath: "/path",
+        },
+    ];
+
+    const result = await executeDockerTool({
+        runId,
+        tool: "gitleaks",
+        stage: "running-gitleaks",
+        command: invocation.command,
+        image: invocation.image,
+        volumes,
+        verbose: shouldLogVerboseCommands(run),
+    });
+
+    const stdoutText = result.stdout;
+    const exitCode = result.exitCode;
 
     if (exitCode !== 0) {
         /**
@@ -340,7 +361,13 @@ async function runGitleaks(scanTarget: string, runId: number) {
 }
 
 // Run syft to get the sbom
-async function runSyft(scanTarget: string, runId: number) {
+async function runSyft(scanTarget: string, runId: number, run: Run) {
+    const invocation = resolveRunToolInvocation(run, "syft", {
+        image: "anchore/syft:latest",
+        command: ["-o", "cyclonedx-json", "/project"],
+    });
+    if (!invocation) return { skipped: true };
+
     const volumes = [
         {
             hostPath: scanTarget,
@@ -348,22 +375,20 @@ async function runSyft(scanTarget: string, runId: number) {
         },
     ];
 
-    const proc = dockerRun(
-        ["-o", "cyclonedx-json", "/project"],
-        "anchore/syft:latest",
-        volumes
-    );
-    // docker run --rm -v ./:/project anchore/syft:latest -o cyclonedx-json /project
+    const result = await executeDockerTool({
+        runId,
+        tool: "syft",
+        stage: "running-syft",
+        command: invocation.command,
+        image: invocation.image,
+        volumes,
+        verbose: shouldLogVerboseCommands(run),
+    });
 
-    const outputText = await proc.stdout.text();
-    const exitCode = await proc.exited;
-
-    if (exitCode !== 0) {
-        const errText =
-            typeof proc.stderr === "string" ? proc.stderr : "Syft execution failed";
-        throw new Error(`Syft failed with exit code ${exitCode}: ${errText}`);
+    if (result.exitCode !== 0) {
+        throw new Error(`Syft failed with exit code ${result.exitCode}: ${result.stderr || "Syft execution failed"}`);
     }
 
-    const parsed = JSON.parse(outputText);
+    const parsed = JSON.parse(result.stdout);
     return parsed;
 }

@@ -1,7 +1,8 @@
 import { spawn } from "bun";
 import { logRun } from "../api/worker-manager";
-import { dockerRun } from "./docker";
+import { executeDockerTool } from "./docker";
 import { type Run, setRunStage } from "./update-runs";
+import { resolveRunToolInvocation, shouldLogVerboseCommands } from "./tooling";
 
 type FindingSeverity = "info" | "low" | "medium" | "high" | "critical";
 
@@ -62,7 +63,7 @@ export async function processService(run: Run): Promise<[Finding[], Decision]> {
 			details: { target: targetUrl },
 		});
 
-		const nucleiFindings = await runNucleiScan(targetUrl, run.id);
+		const nucleiFindings = await runNucleiScan(targetUrl, run.id, run);
 		findings.push(...nucleiFindings);
 
 		const blocking = hasBlockingRuntimeFindings(nucleiFindings);
@@ -211,19 +212,29 @@ function validateServiceUrl(input: string): string {
 	return parsed.toString();
 }
 
-async function runNucleiScan(targetUrl: string, runId: number): Promise<Finding[]> {
+async function runNucleiScan(targetUrl: string, runId: number, run: Run): Promise<Finding[]> {
 	const findings: Finding[] = [];
 
-	const proc = dockerRun(
-		["-u", targetUrl, "-jsonl", "-silent"],
-		"projectdiscovery/nuclei:latest",
-		[],
-		"minikube"
-	);
+	const invocation = resolveRunToolInvocation(run, "nuclei", {
+		image: "projectdiscovery/nuclei:latest",
+		command: ["-u", targetUrl, "-jsonl", "-silent"],
+	});
+	if (!invocation) return [];
 
-	const output = await proc.stdout.text();
-	const errText = await proc.stderr.text();
-	const exitCode = await proc.exited;
+	const result = await executeDockerTool({
+		runId,
+		tool: "nuclei",
+		stage: "runtime-scan",
+		command: invocation.command,
+		image: invocation.image,
+		volumes: [],
+		network: "minikube",
+		verbose: shouldLogVerboseCommands(run),
+	});
+
+	const output = result.stdout;
+	const errText = result.stderr;
+	const exitCode = result.exitCode;
 
 	if (exitCode !== 0 && !output.trim()) {
 		throw new Error(

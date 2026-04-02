@@ -2,12 +2,19 @@ import { Hono } from "hono";
 import { cors } from "hono/cors";
 import { mkdirSync } from "node:fs";
 import { join } from "node:path";
-import { getRun, insertRun, listRunLogs, listRuns } from "./src/api/db-actions";
+import {
+  getRun,
+  insertRun,
+  listRunCommands,
+  listRunLogs,
+  listRuns,
+} from "./src/api/db-actions";
 import { buildHealthReport } from "./src/api/health-helper";
 import {
   isValidKind,
   parseCreateRunRequest,
   rowToApi,
+  validateCreateRunInput,
 } from "./src/api/request-utilities";
 import { DATA_DIR, DB_PATH } from "./src/db";
 import { serveStatic } from "hono/bun";
@@ -76,6 +83,7 @@ app.post("/analysis-runs", async (c) => {
     if (parsed instanceof Response) return parsed;
 
     const { kind, input_ref, file } = parsed;
+    const { toolOptionsJson } = validateCreateRunInput(parsed);
 
     if (!isValidKind(kind)) {
       return c.json({
@@ -93,7 +101,7 @@ app.post("/analysis-runs", async (c) => {
         return c.json({ error: "input_ref must be a non-empty string" }, 400);
       }
 
-      const row = insertRun.get(kind, input_ref.trim());
+      const row = insertRun.get(kind, input_ref.trim(), toolOptionsJson);
       return c.json(rowToApi(row), 201);
     }
 
@@ -110,7 +118,7 @@ app.post("/analysis-runs", async (c) => {
         ? input_ref.trim()
         : file.name || `${kind}-upload`;
 
-    const row = insertRun.get(kind, normalizedInputRef);
+    const row = insertRun.get(kind, normalizedInputRef, toolOptionsJson);
     const apiRow = rowToApi(row);
 
     const runDir = join(DATA_DIR, "runs", String(apiRow.id));
@@ -135,7 +143,8 @@ app.post("/analysis-runs", async (c) => {
     );
   } catch (error) {
     console.error("[analysis-runs] request parse failed:", error);
-    return c.json({ error: "Failed to parse request body" }, 400);
+    const message = error instanceof Error ? error.message : "Failed to parse request body";
+    return c.json({ error: message }, 400);
   }
 });
 
@@ -175,6 +184,19 @@ app.get("/analysis-runs/:id/logs", (c) => {
   const LOG_LIMIT = 1000;
 
   const rows = listRunLogs.all(id, LOG_LIMIT).map(rowToApi);
+  return c.json(rows);
+});
+
+app.get("/analysis-runs/:id/commands", (c) => {
+  const idRaw = c.req.param("id");
+  const id = Number(idRaw);
+
+  if (!Number.isInteger(id) || id <= 0) {
+    return c.json({ error: "Invalid analysis run id" }, 400);
+  }
+
+  const LOG_LIMIT = 1000;
+  const rows = listRunCommands.all(id, LOG_LIMIT).map(rowToApi);
   return c.json(rows);
 });
 

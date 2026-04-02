@@ -1,8 +1,9 @@
-import { dockerRun } from "./docker";
+import { executeDockerTool } from "./docker";
 import { type Run, setRunStage } from "./update-runs";
 import { DATA_DIR } from "../db";
 import { rm } from "node:fs/promises";
 import { logRun } from "../api/worker-manager";
+import { resolveRunToolInvocation, shouldLogVerboseCommands } from "./tooling";
 
 
 export async function processDockerfile(run: Run) {
@@ -42,23 +43,31 @@ export async function processDockerfile(run: Run) {
         setRunStage(run.id, "running-semgrep", "Running Semgrep");
         logRun(run.id, "info", "Semgrep started", { stage: "running-semgrep" });
 
-        const proc = dockerRun(
-            ["semgrep", "--config", "p/dockerfile", "--json", "--no-git-ignore", "/data"],
-            "semgrep/semgrep:latest",
-            volumes
-        );
+        const semgrepInvocation = resolveRunToolInvocation(run, "semgrep", {
+            image: "semgrep/semgrep:latest",
+            command: ["semgrep", "--config", "p/dockerfile", "--json", "--no-git-ignore", "/data"],
+        });
 
-        const outputText = await proc.stdout.text();
+        if (semgrepInvocation) {
+            const semgrepResult = await executeDockerTool({
+                runId: run.id,
+                tool: "semgrep",
+                stage: "running-semgrep",
+                command: semgrepInvocation.command,
+                image: semgrepInvocation.image,
+                volumes,
+                verbose: shouldLogVerboseCommands(run),
+            });
 
-        // optional: inspect exit code
-        const exitCode = await proc.exited;
-        if (exitCode !== 0) {
-            const errText = proc.stderr ?? "";
-            throw new Error(`Semgrep failed with exit code ${exitCode}: ${errText} `);
+            if (semgrepResult.exitCode !== 0) {
+                throw new Error(`Semgrep failed with exit code ${semgrepResult.exitCode}: ${semgrepResult.stderr}`);
+            }
+
+            const semgrep = JSON.parse(semgrepResult.stdout);
+            findings["semgrep"] = semgrep.results || [];
+        } else {
+            findings["semgrep"] = [];
         }
-
-        const semgrep = JSON.parse(outputText);
-        findings["semgrep"] = semgrep.results || [];
         logRun(run.id, "info", "Semgrep finished", {
             stage: "running-semgrep",
             details: {
@@ -71,21 +80,31 @@ export async function processDockerfile(run: Run) {
         // docker run --rm -v ./data/runs/1/:/project aquasec/trivy:canary --format json config /project --file-patterns "dockerfile:Dockerfile*
         setRunStage(run.id, "running-trivy", "Running Trivy");
         logRun(run.id, "info", "Trivy started", { stage: "running-trivy" });
-        const trivyProc = dockerRun(
-            ["--quiet", "--format", "json", "config", "/data", "--file-patterns", "dockerfile:Dockerfile*"],
-            "aquasec/trivy:canary",
-            volumes
-        );
+        const trivyInvocation = resolveRunToolInvocation(run, "trivy", {
+            image: "aquasec/trivy:canary",
+            command: ["--quiet", "--format", "json", "config", "/data", "--file-patterns", "dockerfile:Dockerfile*"],
+        });
 
-        const trivyOutputText = await trivyProc.stdout.text();
+        if (trivyInvocation) {
+            const trivyResult = await executeDockerTool({
+                runId: run.id,
+                tool: "trivy",
+                stage: "running-trivy",
+                command: trivyInvocation.command,
+                image: trivyInvocation.image,
+                volumes,
+                verbose: shouldLogVerboseCommands(run),
+            });
 
-        const trivyExitCode = await trivyProc.exited;
-        if (trivyExitCode !== 0) {
-            const errText = trivyProc.stderr ?? "";
-            throw new Error(`Trivy failed with exit code ${trivyExitCode}: ${errText} `);
+            if (trivyResult.exitCode !== 0) {
+                throw new Error(`Trivy failed with exit code ${trivyResult.exitCode}: ${trivyResult.stderr}`);
+            }
+
+            const trivyResults = JSON.parse(trivyResult.stdout);
+            findings["trivy"] = trivyResults.Results || [];
+        } else {
+            findings["trivy"] = [];
         }
-        const trivyResults = JSON.parse(trivyOutputText);
-        findings["trivy"] = trivyResults.Results || [];
         logRun(run.id, "info", "Trivy finished", {
             stage: "running-trivy",
             details: {

@@ -15,7 +15,7 @@ const claimNextPendingRunQuery = db.query(`
     LIMIT 1
   )
   RETURNING
-    id, kind, input_ref, status, stage,
+    id, kind, input_ref, status, stage, tool_options_json,
     findings_json, decision_json, error_text,
     created_at, started_at, finished_at
 `);
@@ -28,7 +28,7 @@ const markRunFailedQuery = db.query(`
     finished_at = datetime('now')
   WHERE id = ?1
   RETURNING
-    id, kind, input_ref, status, stage,
+    id, kind, input_ref, status, stage, tool_options_json,
     findings_json, decision_json, error_text,
     created_at, started_at, finished_at
 `);
@@ -39,7 +39,7 @@ const markRunStageQuery = db.query(`
     stage = ?2
   WHERE id = ?1
   RETURNING
-    id, kind, input_ref, status, stage,
+    id, kind, input_ref, status, stage, tool_options_json,
     findings_json, decision_json, error_text,
     created_at, started_at, finished_at
 `);
@@ -53,7 +53,7 @@ export const markRunDoneQuery = db.query(`
     finished_at = datetime('now')
   WHERE id = ?1
   RETURNING
-    id, kind, input_ref, status, stage,
+    id, kind, input_ref, status, stage, tool_options_json,
     findings_json, decision_json, error_text,
     created_at, started_at, finished_at
 `);
@@ -64,6 +64,7 @@ export type Run = {
   input_ref: string;
   status: string;
   stage: string | null;
+  tool_options_json?: unknown;
   findings_json: string | null;
   decision_json: string | null;
   error_text: string | null;

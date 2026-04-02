@@ -9,12 +9,30 @@ export type RunKind =
   | "k8s_service";
 export type RunStatus = "pending" | "running" | "done" | "failed" | "rejected";
 export type CheckState = "pass" | "warn" | "fail" | "unknown";
+export type ToolName = "semgrep" | "trivy" | "gitleaks" | "syft" | "grype" | "nuclei";
+
+export type ToolOptions = {
+  enabled_tools?: ToolName[];
+  overrides?: Partial<
+    Record<
+      ToolName,
+      {
+        image?: string;
+        extra_args?: string[];
+        command?: string[];
+      }
+    >
+  >;
+  verbose_commands?: boolean;
+};
+
 export type AnalysisRun = {
   id: number;
   kind: RunKind;
   input_ref: string;
   status: RunStatus;
   stage?: string | null;
+  tool_options_json?: ToolOptions | null;
   findings_json?: unknown;
   decision_json?: unknown;
   error_text?: string | null;
@@ -64,4 +82,21 @@ export type FindingsSection = {
   kind: "semgrep" | "trivy" | "syft" | "gitleaks" | "grype" | "generic";
   items: unknown[];
   raw: unknown;
+};
+
+export type RunCommand = {
+  id: number;
+  run_id: number;
+  tool: ToolName | string;
+  stage: string | null;
+  image: string;
+  command_text: string;
+  command_json?: string[];
+  stdout_text?: string | null;
+  stderr_text?: string | null;
+  exit_code?: number | null;
+  status: "running" | "done" | "failed";
+  started_at: string;
+  finished_at?: string | null;
+  duration_ms?: number | null;
 };

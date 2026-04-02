@@ -1,5 +1,12 @@
 import React, { useEffect, useMemo, useRef, useState } from "react";
-import type { RunKind, AnalysisRun, HealthReport } from "./types";
+import type {
+  RunKind,
+  AnalysisRun,
+  HealthReport,
+  ToolName,
+  ToolOptions,
+  RunCommand,
+} from "./types";
 
 interface RunLog {
   id: number;
@@ -8,7 +15,7 @@ interface RunLog {
   level: "debug" | "info" | "warn" | "error";
   stage: string | null;
   message: string;
-  details_json: string | null;
+  details_json: unknown;
 }
 
 import { cn, parseJson } from "./utilities/json";
@@ -26,6 +33,25 @@ import { Subsection, SectionTitle, Field } from "./components/sections";
 
 const API_BASE = "http://localhost:2002";
 const POLL_MS = 5000;
+const TOOL_DEFAULTS: Record<
+  ToolName,
+  { image: string; command: string[] }
+> = {
+  semgrep: { image: "semgrep/semgrep:latest", command: ["semgrep", "--config", "auto", "--json", "--no-git-ignore"] },
+  trivy: { image: "aquasec/trivy:canary", command: ["--quiet", "--format", "json"] },
+  gitleaks: { image: "zricethezav/gitleaks:latest", command: ["detect", "--report-format", "json", "--report-path", "-", "--no-banner", "--no-git"] },
+  syft: { image: "anchore/syft:latest", command: ["-o", "cyclonedx-json"] },
+  grype: { image: "anchore/grype:latest", command: ["-o", "json"] },
+  nuclei: { image: "projectdiscovery/nuclei:latest", command: ["-jsonl", "-silent"] },
+};
+const TOOLS_BY_KIND: Record<RunKind, ToolName[]> = {
+  repo: ["semgrep", "trivy", "gitleaks", "syft"],
+  archive: ["semgrep", "trivy", "gitleaks", "syft"],
+  dockerfile: ["semgrep", "trivy"],
+  image: ["trivy", "syft", "grype"],
+  k8s_manifest: ["semgrep", "trivy", "nuclei"],
+  k8s_service: ["nuclei"],
+};
 
 const kindMeta: Record<
   RunKind,
@@ -104,6 +130,12 @@ function App() {
   const currentMeta = kindMeta[kind];
 
   const [runLogs, setRunLogs] = useState<RunLog[]>([]);
+  const [runCommands, setRunCommands] = useState<RunCommand[]>([]);
+  const [verboseCommands, setVerboseCommands] = useState(false);
+  const [enabledTools, setEnabledTools] = useState<Partial<Record<ToolName, boolean>>>({});
+  const [extraArgsByTool, setExtraArgsByTool] = useState<Partial<Record<ToolName, string>>>({});
+  const [customCommandByTool, setCustomCommandByTool] = useState<Partial<Record<ToolName, string>>>({});
+  const [imageByTool, setImageByTool] = useState<Partial<Record<ToolName, string>>>({});
 
   useEffect(() => {
     selectedRunIdRef.current = selectedRun?.id ?? null;
@@ -158,9 +190,17 @@ function App() {
   async function loadRunById(id: number) {
     setSelectedRunLoading(true);
     try {
-      const res = await fetch(`${API_BASE}/analysis-runs/${id}`);
-      const data = await res.json();
-      setSelectedRun(data);
+      const [runRes, logsRes, commandsRes] = await Promise.all([
+        fetch(`${API_BASE}/analysis-runs/${id}`),
+        fetch(`${API_BASE}/analysis-runs/${id}/logs`),
+        fetch(`${API_BASE}/analysis-runs/${id}/commands`),
+      ]);
+      const runData = await runRes.json();
+      const logsData = await logsRes.json();
+      const commandsData = await commandsRes.json();
+      setSelectedRun(runData);
+      setRunLogs(Array.isArray(logsData) ? logsData : []);
+      setRunCommands(Array.isArray(commandsData) ? commandsData : []);
     } finally {
       setSelectedRunLoading(false);
     }
@@ -170,6 +210,41 @@ function App() {
     const res = await fetch(`${API_BASE}/analysis-runs/${id}/logs`);
     const data = await res.json();
     setRunLogs(Array.isArray(data) ? data : []);
+  }
+
+  async function loadRunCommands(id: number) {
+    const res = await fetch(`${API_BASE}/analysis-runs/${id}/commands`);
+    const data = await res.json();
+    setRunCommands(Array.isArray(data) ? data : []);
+  }
+
+  function buildToolOptionsPayload(): ToolOptions {
+    const tools = TOOLS_BY_KIND[kind];
+    const enabled = tools.filter((tool) => enabledTools[tool] !== false);
+    const overrides: NonNullable<ToolOptions["overrides"]> = {};
+
+    for (const tool of tools) {
+      const image = imageByTool[tool]?.trim();
+      const extraArgsRaw = extraArgsByTool[tool]?.trim();
+      const customRaw = customCommandByTool[tool]?.trim();
+
+      const extraArgs = extraArgsRaw ? extraArgsRaw.split(/\s+/).filter(Boolean) : undefined;
+      const command = customRaw ? customRaw.split(/\s+/).filter(Boolean) : undefined;
+
+      if (image || (extraArgs && extraArgs.length > 0) || (command && command.length > 0)) {
+        overrides[tool] = {
+          image,
+          extra_args: extraArgs,
+          command,
+        };
+      }
+    }
+
+    return {
+      enabled_tools: enabled,
+      overrides: Object.keys(overrides).length ? overrides : undefined,
+      verbose_commands: verboseCommands,
+    };
   }
 
   async function ensureWorker() {
@@ -200,6 +275,7 @@ function App() {
 
     try {
       let res: Response;
+      const toolOptions = buildToolOptionsPayload();
 
       if (currentMeta.mode === "text") {
         if (!inputRef.trim()) {
@@ -209,7 +285,7 @@ function App() {
         res = await fetch(`${API_BASE}/analysis-runs`, {
           method: "POST",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ kind, input_ref: inputRef.trim() }),
+          body: JSON.stringify({ kind, input_ref: inputRef.trim(), tool_options: toolOptions }),
         });
       } else {
         if (!file) {
@@ -220,6 +296,7 @@ function App() {
         formData.append("kind", kind);
         formData.append("file", file);
         formData.append("input_ref", inputRef.trim() || file.name);
+        formData.append("tool_options", JSON.stringify(toolOptions));
 
         res = await fetch(`${API_BASE}/analysis-runs`, {
           method: "POST",
@@ -237,6 +314,7 @@ function App() {
       setFile(null);
       await loadRuns();
       await loadRunById(data.id);
+      await loadRunCommands(data.id);
     } catch (error) {
       setSubmitError(error instanceof Error ? error.message : "Unknown error.");
     } finally {
@@ -254,6 +332,7 @@ function App() {
       if (selectedRunIdRef.current) {
         loadRunById(selectedRunIdRef.current);
         loadRunLogs(selectedRunIdRef.current);
+        loadRunCommands(selectedRunIdRef.current);
       }
     }, POLL_MS);
 
@@ -269,6 +348,20 @@ function App() {
     () => parseJson(selectedRun?.decision_json),
     [selectedRun],
   );
+  const commandPreview = useMemo(() => {
+    const options = buildToolOptionsPayload();
+    return TOOLS_BY_KIND[kind]
+      .filter((tool) => options.enabled_tools?.includes(tool) ?? true)
+      .map((tool) => {
+        const defaults = TOOL_DEFAULTS[tool];
+        const override = options.overrides?.[tool];
+        const image = override?.image || defaults.image;
+        const cmd = override?.command?.length
+          ? override.command
+          : [...defaults.command, ...(override?.extra_args ?? [])];
+        return `${tool}: docker run --rm ${image} ${cmd.join(" ")}`;
+      });
+  }, [kind, enabledTools, extraArgsByTool, customCommandByTool, imageByTool, verboseCommands]);
   const manifestFindingsJson = useMemo(
     () => parseJson(selectedRun?.findings_json),
     [selectedRun?.findings_json],
@@ -283,6 +376,20 @@ function App() {
     const anchor = document.createElement("a");
     anchor.href = url;
     anchor.download = `run-${selectedRun.id}-k8s-manifest-findings.json`;
+    document.body.appendChild(anchor);
+    anchor.click();
+    document.body.removeChild(anchor);
+    URL.revokeObjectURL(url);
+  }
+
+  function downloadRunCommandLogs() {
+    if (!selectedRun) return;
+    const pretty = JSON.stringify(runCommands, null, 2);
+    const blob = new Blob([pretty], { type: "application/json" });
+    const url = URL.createObjectURL(blob);
+    const anchor = document.createElement("a");
+    anchor.href = url;
+    anchor.download = `run-${selectedRun.id}-command-logs.json`;
     document.body.appendChild(anchor);
     anchor.click();
     document.body.removeChild(anchor);
@@ -352,6 +459,10 @@ function App() {
                       setFile(null);
                       setSubmitMessage(null);
                       setSubmitError(null);
+                      setEnabledTools({});
+                      setExtraArgsByTool({});
+                      setCustomCommandByTool({});
+                      setImageByTool({});
                     }}
                     className={cn(
                       "border px-3 py-2 text-left text-sm",
@@ -397,6 +508,77 @@ function App() {
                   </Field>
                 </>
               )}
+
+              <div className="border border-zinc-800 p-3">
+                <p className="text-xs uppercase tracking-[0.14em] text-zinc-500">
+                  Advanced tool options
+                </p>
+                <label className="mt-3 flex items-center gap-2 text-sm text-zinc-300">
+                  <input
+                    type="checkbox"
+                    checked={verboseCommands}
+                    onChange={(event) => setVerboseCommands(event.target.checked)}
+                    className="h-4 w-4"
+                  />
+                  Verbose command logging (store stdout/stderr)
+                </label>
+
+                <div className="mt-3 space-y-3">
+                  {TOOLS_BY_KIND[kind].map((tool) => {
+                    const enabled = enabledTools[tool] !== false;
+                    return (
+                      <div key={tool} className="border border-zinc-800 p-2">
+                        <label className="flex items-center gap-2 text-sm text-zinc-200">
+                          <input
+                            type="checkbox"
+                            checked={enabled}
+                            onChange={(event) =>
+                              setEnabledTools((prev) => ({
+                                ...prev,
+                                [tool]: event.target.checked,
+                              }))
+                            }
+                            className="h-4 w-4"
+                          />
+                          Enable {tool}
+                        </label>
+                        <div className="mt-2 grid gap-2">
+                          <input
+                            value={imageByTool[tool] ?? ""}
+                            onChange={(event) =>
+                              setImageByTool((prev) => ({ ...prev, [tool]: event.target.value }))
+                            }
+                            placeholder="Image override (optional)"
+                            className="h-9 w-full border border-zinc-800 bg-zinc-950 px-2 text-xs text-white outline-none placeholder:text-zinc-600 focus:border-sky-500"
+                          />
+                          <input
+                            value={extraArgsByTool[tool] ?? ""}
+                            onChange={(event) =>
+                              setExtraArgsByTool((prev) => ({ ...prev, [tool]: event.target.value }))
+                            }
+                            placeholder="Extra args (space-separated)"
+                            className="h-9 w-full border border-zinc-800 bg-zinc-950 px-2 text-xs text-white outline-none placeholder:text-zinc-600 focus:border-sky-500"
+                          />
+                          <input
+                            value={customCommandByTool[tool] ?? ""}
+                            onChange={(event) =>
+                              setCustomCommandByTool((prev) => ({ ...prev, [tool]: event.target.value }))
+                            }
+                            placeholder="Custom command (space-separated, optional)"
+                            className="h-9 w-full border border-zinc-800 bg-zinc-950 px-2 text-xs text-white outline-none placeholder:text-zinc-600 focus:border-sky-500"
+                          />
+                        </div>
+                      </div>
+                    );
+                  })}
+                </div>
+                <div className="mt-3">
+                  <p className="text-xs uppercase tracking-[0.14em] text-zinc-500">Command preview</p>
+                  <pre className="mt-2 overflow-x-auto border border-zinc-800 bg-zinc-950 p-2 text-xs text-zinc-400">
+                    {commandPreview.length === 0 ? "No enabled tools." : commandPreview.join("\n")}
+                  </pre>
+                </div>
+              </div>
 
               {submitMessage && (
                 <InlineNotice tone="success" message={submitMessage} />
@@ -542,11 +724,60 @@ function App() {
                               <span>{log.stage || "—"}</span>
                             </div>
                             <p className="mt-2 text-zinc-200">{log.message}</p>
+                            {log.details_json ? (
+                              <pre className="mt-2 overflow-x-auto border border-zinc-800 bg-zinc-950 p-2 text-xs text-zinc-400">
+                                {JSON.stringify(log.details_json, null, 2)}
+                              </pre>
+                            ) : null}
                           </div>
                         ))
                       )}
                     </div>
                   </details>
+                </Subsection>
+
+                <Subsection title="Command executions">
+                  <div className="flex justify-end pb-2">
+                    <button
+                      type="button"
+                      onClick={downloadRunCommandLogs}
+                      className="inline-flex items-center justify-center border border-zinc-700 bg-zinc-900 px-3 py-2 text-xs uppercase tracking-[0.14em] text-zinc-200 hover:border-zinc-500 hover:bg-zinc-800"
+                    >
+                      Download command logs
+                    </button>
+                  </div>
+                  {runCommands.length === 0 ? (
+                    <EmptyState message="No command executions yet." compact />
+                  ) : (
+                    <div className="space-y-3">
+                      {runCommands.map((cmd) => (
+                        <details key={cmd.id} className="border border-zinc-800 p-3">
+                          <summary className="cursor-pointer select-none text-sm text-zinc-200">
+                            [{cmd.tool}] {cmd.status} {cmd.duration_ms ? `(${cmd.duration_ms}ms)` : ""}
+                          </summary>
+                          <div className="mt-2 space-y-2">
+                            <p className="text-xs text-zinc-400">{cmd.stage || "—"}</p>
+                            <p className="text-xs text-zinc-400">Image: {cmd.image}</p>
+                            <pre className="overflow-x-auto border border-zinc-800 bg-zinc-950 p-2 text-xs text-zinc-300">
+                              {cmd.command_text}
+                            </pre>
+                            <div>
+                              <p className="text-xs uppercase tracking-[0.12em] text-zinc-500">stdout</p>
+                              <pre className="overflow-x-auto border border-zinc-800 bg-zinc-950 p-2 text-xs text-zinc-400">
+                                {cmd.stdout_text || "(empty)"}
+                              </pre>
+                            </div>
+                            <div>
+                              <p className="text-xs uppercase tracking-[0.12em] text-zinc-500">stderr</p>
+                              <pre className="overflow-x-auto border border-zinc-800 bg-zinc-950 p-2 text-xs text-zinc-400">
+                                {cmd.stderr_text || "(empty)"}
+                              </pre>
+                            </div>
+                          </div>
+                        </details>
+                      ))}
+                    </div>
+                  )}
                 </Subsection>
 
                 {(selectedRun.kind === "k8s_manifest" ||
