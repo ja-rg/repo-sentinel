@@ -218,6 +218,7 @@ async function runNucleiScan(targetUrl: string, runId: number): Promise<Finding[
 		["-u", targetUrl, "-jsonl", "-silent"],
 		"projectdiscovery/nuclei:latest",
 		[],
+		"minikube"
 	);
 
 	const output = await proc.stdout.text();
