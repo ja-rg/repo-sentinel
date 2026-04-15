@@ -1,7 +1,10 @@
 import { hostname } from "node:os";
 import { processDockerfile } from "./src/runner/process-dockerfile";
 import { processImage } from "./src/runner/process-image";
-import { processManifest } from "./src/runner/process-manifest";
+import {
+  cleanupAllPublishedManifestTunnels,
+  processManifest,
+} from "./src/runner/process-manifest";
 import { processRepoOrArchive } from "./src/runner/process-repo-or-archive";
 import { processService } from "./src/runner/process-service";
 import {
@@ -56,6 +59,8 @@ const heartbeatTimer = setInterval(() => {
 
 function markTerminated(reason: string) {
   clearInterval(heartbeatTimer);
+  cleanupAllPublishedManifestTunnels();
+
   try {
     heartbeatWorker({
       workerId,

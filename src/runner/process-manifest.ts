@@ -39,6 +39,32 @@ type ServiceResource = ManifestResource & {
     spec: Record<string, unknown>;
 };
 
+const publishedManifestTunnels = new Map<number, () => void>();
+
+export function cleanupPublishedManifestTunnel(runId: number) {
+    const cleanup = publishedManifestTunnels.get(runId);
+    if (!cleanup) return;
+
+    publishedManifestTunnels.delete(runId);
+    try {
+        cleanup();
+    } catch {
+        // best effort cleanup
+    }
+}
+
+export function cleanupAllPublishedManifestTunnels() {
+    const entries = Array.from(publishedManifestTunnels.entries());
+    for (const [runId, cleanup] of entries) {
+        publishedManifestTunnels.delete(runId);
+        try {
+            cleanup();
+        } catch {
+            // best effort cleanup
+        }
+    }
+}
+
 export async function processManifest(
     run: Run
 ): Promise<[Finding[], Decision]> {
@@ -49,6 +75,8 @@ export async function processManifest(
     let exposedUrl: string | null = null;
     let manifestPath: string | null = null;
     let runtimeTunnelCleanup: (() => void) | null = null;
+    let publishedTunnelCleanup: (() => void) | null = null;
+    let shouldKeepPublishedTunnel = false;
 
     try {
         setRunStage(run.id, "validating-manifest", "Validating uploaded manifest");
@@ -179,10 +207,48 @@ export async function processManifest(
             ];
         }
 
-        // 7. Safe enough to keep; publish service URL after runtime checks pass
+        // 7. Safe enough to keep; publish service URL via a persistent local tunnel
         setRunStage(run.id, "publishing", "Resolving service URL for published access");
-        exposedUrl = await resolveManifestServiceUrl(primaryService, run.id);
+        const publishedTarget = await openPublishedServiceTarget(primaryService, run.id);
+        publishedTunnelCleanup = publishedTarget.cleanup;
+
+        if (!publishedTarget.url) {
+            findings.push({
+                tool: "deployment",
+                category: "deployment",
+                severity: "medium",
+                title: "Published target not resolved",
+                description:
+                    "Manifest passed runtime scan, but a reachable published target could not be prepared.",
+            });
+
+            setRunStage(run.id, "teardown", "Tearing down deployment after unresolved published target");
+            await kubectlDelete(manifestPath, run.id).catch(() => { });
+            setRunStage(run.id, "completed", "Manifest processing completed with teardown");
+            return [
+                findings,
+                {
+                    action: "teardown",
+                    reason: "Deployment succeeded but published target could not be resolved safely.",
+                    stage: "publishing",
+                    applied: false,
+                    exposed_url: null,
+                },
+            ];
+        }
+
+        exposedUrl = publishedTarget.url;
+
+        logRun(run.id, "info", "Published service tunnel established", {
+            stage: "publishing",
+            details: { target: exposedUrl, namespace: primaryService.namespace, service: primaryService.name },
+        });
+
         setRunStage(run.id, "completed", "Manifest processing completed");
+        cleanupPublishedManifestTunnel(run.id);
+        publishedManifestTunnels.set(run.id, publishedTarget.cleanup);
+        shouldKeepPublishedTunnel = true;
+
         return [
             findings,
             {
@@ -234,6 +300,14 @@ export async function processManifest(
         if (runtimeTunnelCleanup) {
             try {
                 runtimeTunnelCleanup();
+            } catch {
+                // best effort cleanup
+            }
+        }
+
+        if (publishedTunnelCleanup && !shouldKeepPublishedTunnel) {
+            try {
+                publishedTunnelCleanup();
             } catch {
                 // best effort cleanup
             }
@@ -484,77 +558,6 @@ async function waitForManifestResources(resources: ManifestResource[], runId: nu
             );
         }
     }
-}
-
-async function resolveManifestServiceUrl(service: ServiceResource, runId: number): Promise<string | null> {
-    const serviceJsonResult = await runCommand(
-        "kubectl",
-        ["get", "service", service.name, "-n", service.namespace, "-o", "json"],
-        20_000,
-    );
-    if (serviceJsonResult.exitCode !== 0) {
-        console.warn(
-            `kubectl get service failed for ${service.namespace}/${service.name} on run ${runId}: ${serviceJsonResult.stderr || serviceJsonResult.stdout}`,
-        );
-        return null;
-    }
-
-    let parsed: Record<string, unknown> = {};
-    try {
-        parsed = JSON.parse(serviceJsonResult.stdout) as Record<string, unknown>;
-    } catch {
-        return null;
-    }
-
-    const spec = (parsed.spec && typeof parsed.spec === "object")
-        ? (parsed.spec as Record<string, unknown>)
-        : {};
-    const ports = Array.isArray(spec.ports) ? spec.ports : [];
-    const firstPort = ports[0] as Record<string, unknown> | undefined;
-    const serviceType = String(spec.type ?? "ClusterIP");
-
-    if ((serviceType === "NodePort" || serviceType === "LoadBalancer") && firstPort) {
-        if (serviceType === "NodePort") {
-            const nodePort = Number(firstPort.nodePort ?? 0);
-            if (nodePort > 0) {
-                const ipResult = await runCommand("minikube", ["ip"], 10_000);
-                if (ipResult.exitCode === 0) {
-                    const host = ipResult.stdout.trim().split(/\r?\n/)[0]?.trim();
-                    if (host) {
-                        return `http://${host}:${nodePort}`;
-                    }
-                }
-            }
-        }
-
-        if (serviceType === "LoadBalancer") {
-            const status = (parsed.status && typeof parsed.status === "object")
-                ? (parsed.status as Record<string, unknown>)
-                : {};
-            const lb = (status.loadBalancer && typeof status.loadBalancer === "object")
-                ? (status.loadBalancer as Record<string, unknown>)
-                : {};
-            const ingress = Array.isArray(lb.ingress) ? lb.ingress : [];
-            const firstIngress = ingress[0] as Record<string, unknown> | undefined;
-            const host = String(firstIngress?.ip ?? firstIngress?.hostname ?? "").trim();
-            const port = Number(firstPort.port ?? 0);
-            if (host && port > 0) {
-                return `http://${host}:${port}`;
-            }
-        }
-    }
-
-    const minikubeResult = await runCommand(
-        "minikube",
-        ["service", service.name, "--namespace", service.namespace, "--url"],
-        15_000,
-    );
-    if (minikubeResult.exitCode === 0) {
-        const url = minikubeResult.stdout.trim().split(/\r?\n/)[0]?.trim();
-        if (url) return url;
-    }
-
-    return null;
 }
 
 function getServiceResources(resources: ManifestResource[]): ServiceResource[] {
@@ -868,4 +871,71 @@ function normalizeSeverity(input: unknown): FindingSeverity {
     if (value === "medium") return "medium";
     if (value === "low") return "low";
     return "info";
+}
+
+async function openPublishedServiceTarget(
+    service: ServiceResource,
+    runId: number,
+): Promise<{ url: string | null; cleanup: () => void }> {
+    const localPort = await allocateLocalPort(28080);
+    const servicePort = getPrimaryServicePort(service);
+    if (!servicePort) {
+        return {
+            url: null,
+            cleanup: () => { },
+        };
+    }
+
+    const proc = spawn({
+        cmd: [
+            "kubectl",
+            "port-forward",
+            "-n",
+            service.namespace,
+            `svc/${service.name}`,
+            `${localPort}:${servicePort}`,
+        ],
+        stdout: "pipe",
+        stderr: "pipe",
+    });
+
+    const outputReader = (async () => {
+        const [stdout, stderr] = await Promise.all([
+            new Response(proc.stdout).text(),
+            new Response(proc.stderr).text(),
+        ]);
+        return { stdout, stderr };
+    })();
+
+    const url = `http://127.0.0.1:${localPort}`;
+    const becameReady = await waitForHttpTarget(url, 20_000);
+
+    if (!becameReady) {
+        try {
+            proc.kill();
+        } catch {
+            // best effort
+        }
+
+        const output = await outputReader.catch(() => ({ stdout: "", stderr: "" }));
+        console.warn(
+            `Published tunnel did not become ready for ${service.namespace}/${service.name} on run ${runId}: ${output.stderr || output.stdout || "unknown error"}`,
+        );
+
+        return {
+            url: null,
+            cleanup: () => { },
+        };
+    }
+
+    return {
+        url,
+        cleanup: () => {
+            try {
+                proc.kill();
+            } catch {
+                // best effort
+            }
+        },
+    };
 }
